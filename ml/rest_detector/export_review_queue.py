@@ -67,6 +67,17 @@ def existing_records(path):
     return records
 
 
+def deduplicated_records(records):
+    unique = {}
+    for record in records:
+        current = unique.get(record["sampleId"])
+        if current is None or (current.get("state") == "unreviewed" and
+                               record.get("state") != "unreviewed"):
+            unique[record["sampleId"]] = record
+    return sorted(unique.values(),
+                  key=lambda item: (item["documentSha256"], item["page"], item["gapId"]))
+
+
 def clipped_box(box, width, height):
     if not isinstance(box, list) or len(box) != 4:
         return None
@@ -317,7 +328,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dpi", type=int, default=800, choices=(400, 600, 800))
     parser.add_argument("--include-all-omr-rests", action="store_true")
-    parser.add_argument("--max-omr-per-class-per-document", type=int, default=25)
+    parser.add_argument("--max-omr-per-class-per-document", type=int, default=5)
     args = parser.parse_args()
     root, output = args.jobs_root.resolve(), args.output.resolve()
     if not root.is_dir():
@@ -331,7 +342,7 @@ def main():
         records.extend(export_job(
             job_dir, image_dir, args.dpi, previous, args.include_all_omr_rests,
             max(1, min(200, args.max_omr_per_class_per_document))))
-    records.sort(key=lambda item: (item["documentSha256"], item["page"], item["gapId"]))
+    records = deduplicated_records(records)
     with queue_path.open("w", encoding="utf-8", newline="\n") as stream:
         for record in records:
             stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")

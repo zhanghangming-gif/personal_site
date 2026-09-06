@@ -222,7 +222,7 @@ def refresh_samples(dataset_dir, jobs_root, exporter_path, python_path, dpi=800)
         os.makedirs(dataset_dir)
     command = [python_path, exporter_path, "--jobs-root", jobs_root,
                "--output", dataset_dir, "--dpi", str(int(dpi)),
-               "--include-all-omr-rests", "--max-omr-per-class-per-document", "25"]
+               "--include-all-omr-rests", "--max-omr-per-class-per-document", "5"]
     completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                timeout=900, universal_newlines=True)
     if completed.returncode != 0:

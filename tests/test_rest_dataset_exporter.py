@@ -49,3 +49,11 @@ def test_existing_human_annotation_survives_candidate_refresh(tmp_path):
     loaded = exporter.existing_records(queue)
     assert loaded['abc']['state'] == 'corrected'
     assert loaded['abc']['annotation'] == sample['annotation']
+
+
+def test_deduplicate_keeps_reviewed_copy_from_repeated_jobs():
+    exporter = exporter_module()
+    duplicate = {'sampleId': 'same', 'documentSha256': '1' * 64, 'page': 1,
+                 'gapId': 'candidate', 'state': 'unreviewed', 'prelabel': None}
+    reviewed = dict(duplicate, state='accepted', annotation={'targets': []})
+    assert exporter.deduplicated_records([duplicate, reviewed, duplicate]) == [reviewed]
