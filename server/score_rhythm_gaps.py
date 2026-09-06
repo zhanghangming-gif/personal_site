@@ -113,7 +113,7 @@ def complement(intervals, limit):
 
 
 def coarse_review_region(measure, onset, duration, expected):
-    source = measure.get("sourceRegion") or {}
+    source = measure.get("sourceRegion") or measure.get("modelReviewRegion") or {}
     box = source.get("bbox")
     if not isinstance(box, list) or len(box) != 4 or expected <= 0:
         return None

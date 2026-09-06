@@ -270,6 +270,7 @@ def annotate_rhythm_gaps(rhythm_report, classification_report):
         if not item:
             continue
         selected = item.get("selectedEvidence") or {}
+        visual = item.get("selectedVisualEvidence") or {}
         gap["restEvidence"] = {
             "status": item.get("status"),
             "suggestedNotation": item.get("suggestedNotation"),
@@ -278,6 +279,10 @@ def annotate_rhythm_gaps(rhythm_report, classification_report):
             "contextGrade": selected.get("contextGrade"),
             "candidateCount": item.get("candidateCount", 0),
             "exactCandidateCount": item.get("exactCandidateCount", 0),
+            "visualModelScore": visual.get("score"),
+            "visualModelClass": visual.get("class"),
+            "visualModelBboxPdf": visual.get("bboxPdf"),
+            "visualModelVersion": (item.get("visualModel") or {}).get("modelVersion"),
             "autoRepairAllowed": False,
             "artifact": "review/rest-classification.json",
         }

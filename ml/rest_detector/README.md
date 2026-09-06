@@ -83,6 +83,8 @@ ml/rest_detector/.venv/Scripts/python ml/rest_detector/train_torchvision.py `
 
 `metrics.json` 分别保存验证集和测试集的 mAP@0.5、每类 AP 和最大召回率；`best.pt` 是验证集表现最好的检查点。100–200 个裁片只作为早期基线，不能满足自动修改乐谱的上线门槛。
 
+生产环境使用独立的 Python 3.11 CPU 推理进程加载 `best.pt`。主 API 一次提交当前乐谱中所有已经映射到 PDF 坐标的节奏缺口，推理进程在 400 DPI 下渲染局部裁片，输出检测框、类别和置信度后退出。模型结果只写入 `review/rest-model.json` 和 `review/rest-classification.json`；当前策略始终保持 `autoRepairAllowed=false`。
+
 ## 4. 上线门槛
 
 分别报告：

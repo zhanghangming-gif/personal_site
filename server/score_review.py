@@ -7,6 +7,7 @@ from score_ir import score_ir, specification
 from score_ir_audit import compare_ir, compare_transposition
 from score_rhythm_gaps import detect_rhythm_gaps, rhythm_gap_issues
 from score_rest_evidence import annotate_rhythm_gaps, classify_rest_gaps
+from score_rest_model import merge_rest_model_evidence, run_rest_model
 from score_contracts import (
     build_transposition_intent,
     canonical_score_from_ir,
@@ -80,6 +81,54 @@ def attach_measure_regions(index, analysis, preflight):
         index['coverage']['pdfObjectMapping'] = 'partial_measure_regions_only'
 
 
+def attach_model_review_regions(index, analysis, preflight):
+    """Attach conservative PDF measure boxes for advisory visual inference.
+
+    These regions never become event evidence.  They allow the rest detector to
+    inspect systems where Audiveris' original line number agrees with MusicXML,
+    even when independent PDF OCR is absent or confused by octave markings.
+    """
+    if len(index['parts']) != 1:
+        return
+    groups = {}
+    for measure in index['parts'][0]['measures']:
+        loc = measure['location']
+        groups.setdefault((loc['page'], loc['system']), []).append(measure)
+    pages = {p['page']: p.get('geometry', {}) for p in preflight.get('pageDetails', [])}
+    mapped = 0
+    for system in analysis.get('systems', []):
+        measures = groups.get((system['page'], system['system']), [])
+        staff, geometry = system.get('pdfStaff'), pages.get(system['page'], {})
+        if not measures or not staff or system.get('staffCount') != 1:
+            continue
+        if any(stack.get('special') for stack in system.get('stacks', [])):
+            continue
+        anchor = system.get('lineStartRaw')
+        if anchor is None or str(anchor) != measures[0]['location']['measure']:
+            continue
+        bars = [x for x in staff['barlines'] if x > staff['left'] + 2 * staff['spacing']]
+        if (len(bars) != len(measures) or len(measures) != system.get('rawMeasures') or
+                not bars or abs(bars[-1] - staff['right']) > staff['spacing']):
+            continue
+        if not geometry.get('width') or not geometry.get('height'):
+            continue
+        left = staff['left']
+        for measure, right in zip(measures, bars):
+            if 'sourceRegion' not in measure:
+                measure['modelReviewRegion'] = {
+                    'page': system['page'], 'coordinateSystem': 'pdf_points_top_left',
+                    'bbox': [max(0, left - staff['spacing']),
+                             max(0, staff['top'] - 5 * staff['spacing']),
+                             min(geometry['width'], right + staff['spacing']),
+                             min(geometry['height'], staff['top'] + 10 * staff['spacing'])],
+                    'basis': 'audiveris_raw_line_anchor_and_pdf_barlines_review_only',
+                    'semanticVerification': False,
+                }
+                mapped += 1
+            left = right
+    index['coverage']['mappedModelReviewMeasures'] = mapped
+
+
 def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml,
                        read_xml, semitones, preference='auto', source_instrument=None,
                        target_instrument=None, output_pdf=None, original_xml=None,
@@ -97,6 +146,8 @@ def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml
         index = score_ir(read_xml(path), origin, pdf_sha, file_digest(path))
         if role in ('original', 'source', 'expected'):
             attach_measure_regions(index, omr_analysis or {}, preflight or {})
+        if role == 'source':
+            attach_model_review_regions(index, omr_analysis or {}, preflight or {})
         artifact = os.path.join(job_dir, role + '-score-ir.json')
         save_json(artifact, index)
         artifacts[role] = {'name': os.path.basename(artifact), 'sha256': file_digest(artifact),
@@ -111,6 +162,8 @@ def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml
             'schemaVersion': 1, 'engine': 'unavailable', 'classifications': [],
             'summary': {'gapCount': len(rhythm_gaps.get('gaps', [])), 'supportedCount': 0},
             'limits': 'OMR 工程不可用，节奏缺口需要原 PDF 视觉确认'}
+    visual_model = run_rest_model(job_dir, source_pdf, rhythm_gaps)
+    rest_classification = merge_rest_model_evidence(rest_classification, visual_model)
     rest_classification_path = os.path.join(job_dir, 'review', 'rest-classification.json')
     save_json(rest_classification_path, rest_classification)
     annotate_rhythm_gaps(rhythm_gaps, rest_classification)

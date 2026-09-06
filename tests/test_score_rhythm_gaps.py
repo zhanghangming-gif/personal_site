@@ -56,6 +56,21 @@ def test_each_voice_has_an_independent_timeline(api):
     assert all("multiple_voices" in item["riskReasons"] for item in report["gaps"])
 
 
+def test_model_only_measure_region_can_locate_review_crop(api):
+    from score_rhythm_gaps import detect_rhythm_gaps
+    current = measure("p1-m2", 2, [event(0, 3)])
+    current["sourceRegion"] = None
+    current["modelReviewRegion"] = {
+        "page": 1, "coordinateSystem": "pdf_points_top_left",
+        "bbox": [100, 200, 300, 280], "basis": "review_only",
+    }
+    report = detect_rhythm_gaps(score([
+        measure("p1-m1", 1, [event(0, 4)]), current,
+        measure("p1-m3", 3, [event(0, 4)]),
+    ]))
+    assert report["gaps"][0]["reviewRegion"]["bbox"] == [234.0, 200.0, 300.0, 280.0]
+
+
 def test_empty_middle_measure_becomes_full_measure_hypothesis(api):
     from score_rhythm_gaps import detect_rhythm_gaps
     measures = [measure("p1-m1", 1, [event(0, 4)]),

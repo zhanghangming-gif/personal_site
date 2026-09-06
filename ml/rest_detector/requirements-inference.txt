@@ -1,0 +1,3 @@
+# Install torch/torchvision from the CPU wheel index before this file.
+Pillow==11.3.0
+PyMuPDF==1.26.4

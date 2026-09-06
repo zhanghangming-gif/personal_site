@@ -191,3 +191,24 @@ def test_measure_regions_require_matching_independent_anchors(api):
         other = score_ir(score(note()))
         attach_measure_regions(other, {'systems': [dict(system, **change)]}, preflight)
         assert 'sourceRegion' not in other['parts'][0]['measures'][0]
+
+
+def test_model_review_regions_use_raw_omr_anchor_without_claiming_event_evidence(api):
+    from score_ir import score_ir
+    from score_review import attach_model_review_regions
+    ir = score_ir(score(note()))
+    system = {'page': 1, 'system': 1, 'staffCount': 1, 'lineStartRaw': 17,
+              'rawMeasures': 1, 'stacks': [{}],
+              'pdfStaff': {'left': 30, 'right': 500, 'top': 100, 'spacing': 5,
+                           'barlines': [30, 500]}}
+    preflight = {'pageDetails': [{'page': 1, 'geometry': {'width': 600, 'height': 800}}]}
+    attach_model_review_regions(ir, {'systems': [system]}, preflight)
+    measure = ir['parts'][0]['measures'][0]
+    assert measure['modelReviewRegion']['bbox'] == [25, 75, 505, 150]
+    assert measure['modelReviewRegion']['basis'].endswith('review_only')
+    assert 'measureRegion' not in measure['events'][0]['evidence']
+    assert ir['coverage']['mappedModelReviewMeasures'] == 1
+
+    unanchored = score_ir(score(note()))
+    attach_model_review_regions(unanchored, {'systems': [dict(system, lineStartRaw=18)]}, preflight)
+    assert 'modelReviewRegion' not in unanchored['parts'][0]['measures'][0]
