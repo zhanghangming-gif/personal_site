@@ -1,10 +1,11 @@
-import { BarChart3, FileText, LogOut, MessageSquare, Pin, Save, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { BarChart3, FileText, LogOut, MessageSquare, Music2, Pin, Save, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { ChangeEvent, useEffect, useState } from 'react';
 import { apiRequest } from '../services/api';
 import { defaultContent, type EditableContent } from '../context/ContentContext';
 import type { CampusPhoto } from '../types';
+import { RestAnnotationPanel } from '../components/RestAnnotationPanel';
 
-type Tab = 'analytics' | 'content' | 'messages';
+type Tab = 'analytics' | 'content' | 'messages' | 'rest-annotations';
 type MetricRow = { label: string; value: number };
 type Analytics = { days: number; views: number; visitors: number; sessions: number; todayViews: number; trend: MetricRow[]; pages: MetricRow[]; referrers: MetricRow[]; devices: MetricRow[] };
 type AdminReply = { id: string; nickname: string; content: string; created_at: string; status: string; report_count: number; like_count: number };
@@ -30,7 +31,7 @@ export default function AdminPage() {
 function AdminConsole({ onLogout }: { onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>('analytics');
   const logout = async () => { await apiRequest('/api/admin/logout', { method: 'POST', body: '{}' }); onLogout(); };
-  return <main className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-white"><header className="sticky top-0 z-20 border-b bg-white/95 px-5 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4"><div><strong className="text-xl">ZHANG. 管理后台</strong><p className="text-xs text-slate-500">内容修改保存后立即生效，无需重新打包</p></div><nav className="flex gap-2">{([['analytics','数据统计',BarChart3],['content','内容管理',FileText],['messages','留言管理',MessageSquare]] as const).map(([value,label,Icon]) => <button key={value} onClick={() => setTab(value)} className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold ${tab === value ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800'}`}><Icon size={16}/>{label}</button>)}<button onClick={() => void logout()} className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-sm text-slate-500"><LogOut size={16}/>退出</button></nav></div></header><div className="mx-auto max-w-7xl p-5 py-8">{tab === 'analytics' && <AnalyticsPanel />}{tab === 'content' && <ContentPanel />}{tab === 'messages' && <MessagesPanel />}</div></main>;
+  return <main className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-white"><header className="sticky top-0 z-20 border-b bg-white/95 px-5 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95"><div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-4"><div><strong className="text-xl">ZHANG. 管理后台</strong><p className="text-xs text-slate-500">内容修改保存后立即生效，无需重新打包</p></div><nav className="flex flex-wrap gap-2">{([['analytics','数据统计',BarChart3],['content','内容管理',FileText],['messages','留言管理',MessageSquare],['rest-annotations','休止符标注',Music2]] as const).map(([value,label,Icon]) => <button key={value} onClick={() => setTab(value)} className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold ${tab === value ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800'}`}><Icon size={16}/>{label}</button>)}<button onClick={() => void logout()} className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-sm text-slate-500"><LogOut size={16}/>退出</button></nav></div></header><div className="mx-auto max-w-[1500px] p-5 py-8">{tab === 'analytics' && <AnalyticsPanel />}{tab === 'content' && <ContentPanel />}{tab === 'messages' && <MessagesPanel />}{tab === 'rest-annotations' && <RestAnnotationPanel />}</div></main>;
 }
 
 function AnalyticsPanel() {

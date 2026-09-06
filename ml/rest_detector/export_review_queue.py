@@ -17,7 +17,7 @@ import pymupdf as fitz
 from PIL import Image
 
 
-VALID_STATES = {"unreviewed", "accepted", "corrected", "rejected"}
+VALID_STATES = {"unreviewed", "accepted", "corrected", "rejected", "skipped"}
 
 
 def load_json(path):

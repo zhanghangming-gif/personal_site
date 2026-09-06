@@ -59,6 +59,10 @@ from score_omr_options import (
     recognition_families, recognition_risk, needs_alternative,
     recognition_attempt, recognition_decision, recognition_consensus,
 )
+from rest_annotation_admin import (
+    build_training_archive, list_samples, refresh_samples, sample_image_path,
+    update_sample,
+)
 
 
 DB_PATH = os.environ.get("MESSAGE_DB_PATH", "/var/lib/personal-site-messages/messages.db")
@@ -66,6 +70,19 @@ DATA_DIR = os.path.dirname(DB_PATH) or "."
 CONTENT_PATH = os.environ.get("SITE_CONTENT_PATH", os.path.join(DATA_DIR, "site-content.json"))
 UPLOAD_DIR = os.environ.get("SITE_UPLOAD_DIR", os.path.join(DATA_DIR, "uploads"))
 SCORE_DIR = os.environ.get("SCORE_WORK_DIR", os.path.join(DATA_DIR, "score-transpose"))
+REST_ANNOTATION_DIR = os.environ.get(
+    "REST_ANNOTATION_DIR", os.path.join(DATA_DIR, "rest-annotations", "review-v1"))
+_REST_EXPORTER_CANDIDATES = (
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), "ml", "rest_detector", "export_review_queue.py"),
+    os.path.join(os.path.dirname(__file__), "ml", "rest_detector", "export_review_queue.py"),
+)
+REST_ANNOTATION_EXPORTER = os.environ.get(
+    "REST_ANNOTATION_EXPORTER",
+    next((path for path in _REST_EXPORTER_CANDIDATES if os.path.isfile(path)),
+         _REST_EXPORTER_CANDIDATES[0]),
+)
+REST_ANNOTATION_PYTHON = os.environ.get(
+    "REST_ANNOTATION_PYTHON", os.environ.get("SCORE_SKILL_PYTHON", "python3"))
 HOST = os.environ.get("MESSAGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MESSAGE_PORT", "8787"))
 IP_HASH_SALT = os.environ.get("MESSAGE_IP_HASH_SALT", "development-only-change-me")
@@ -88,6 +105,8 @@ EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 ENTITY_RE = re.compile(r"^/api/(messages|replies)/([0-9a-f-]{36})/(likes|reports)$", re.I)
 REPLY_RE = re.compile(r"^/api/messages/([0-9a-f-]{36})/replies$", re.I)
 ADMIN_ENTITY_RE = re.compile(r"^/api/admin/(messages|replies)/([0-9a-f-]{36})$", re.I)
+ADMIN_REST_SAMPLE_RE = re.compile(r"^/api/admin/rest-annotations/([0-9a-f]{24})$", re.I)
+ADMIN_REST_IMAGE_RE = re.compile(r"^/api/admin/rest-annotations/([0-9a-f]{24})/image$", re.I)
 SCORE_STATUS_RE = re.compile(r"^/api/score/transpositions/([0-9a-f-]{36})$", re.I)
 SCORE_OUTPUT_RE = re.compile(r"^/api/score/transpositions/([0-9a-f-]{36})/output$", re.I)
 SCORE_REVIEW_RE = re.compile(r"^/api/score/transpositions/([0-9a-f-]{36})/(candidate|review-report|editor|edits|musicxml|original|inspection|page-image|region-image)$", re.I)
@@ -4136,6 +4155,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/admin/messages":
             if self.require_admin(): return self.get_admin_messages(parse_qs(parsed.query))
             return
+        if parsed.path == "/api/admin/rest-annotations":
+            if self.require_admin(): return self.get_rest_annotations(parse_qs(parsed.query))
+            return
+        if parsed.path == "/api/admin/rest-annotations/export":
+            if self.require_admin(): return self.export_rest_annotations()
+            return
+        match = ADMIN_REST_IMAGE_RE.match(parsed.path)
+        if match:
+            if self.require_admin(): return self.get_rest_annotation_image(match.group(1))
+            return
         match = SCORE_STATUS_RE.match(parsed.path)
         if match:
             return self.get_score_status(match.group(1))
@@ -4164,6 +4193,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/admin/upload":
                 if self.require_admin(): return self.upload()
                 return
+            if path == "/api/admin/rest-annotations/refresh":
+                if self.require_admin(): return self.refresh_rest_annotations()
+                return
             match = REPLY_RE.match(path)
             if match: return self.create_reply(match.group(1))
             match = ENTITY_RE.match(path)
@@ -4175,6 +4207,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(400, {"success": False, "message": str(exc)})
 
     def do_PUT(self):
+        match = ADMIN_REST_SAMPLE_RE.match(urlparse(self.path).path)
+        if match:
+            if not self.require_admin(): return
+            try:
+                payload = self.body(128 * 1024)
+                item = update_sample(REST_ANNOTATION_DIR, match.group(1), payload)
+                return self.json_response(200, {"success": True, "data": item,
+                                                "message": "训练标注已保存"})
+            except (ValueError, OSError) as exc:
+                return self.json_response(409, {"success": False, "message": str(exc)})
         if urlparse(self.path).path == "/api/admin/content" and self.require_admin():
             try:
                 payload = self.body(2 * 1024 * 1024)
@@ -4482,6 +4524,63 @@ class Handler(BaseHTTPRequestHandler):
             for row in db.execute(f"SELECT m.*,(SELECT COUNT(*) FROM likes l WHERE l.entity_type='message' AND l.entity_id=m.id) like_count FROM messages m {where} ORDER BY m.pinned DESC,m.created_at DESC LIMIT 200", params):
                 item = dict(row); item["replies"] = [dict(r) for r in db.execute("SELECT r.*,(SELECT COUNT(*) FROM likes l WHERE l.entity_type='reply' AND l.entity_id=r.id) like_count FROM replies r WHERE message_id=? ORDER BY created_at", (row["id"],))]; messages.append(item)
         return self.json_response(200, {"success": True, "data": messages})
+
+    def get_rest_annotations(self, query):
+        state = (query.get("state") or ["all"])[0]
+        try:
+            offset = int((query.get("offset") or ["0"])[0])
+            limit = int((query.get("limit") or ["40"])[0])
+            data = list_samples(REST_ANNOTATION_DIR, state, offset, limit)
+            return self.json_response(200, {"success": True, "data": data})
+        except (TypeError, ValueError, OSError) as exc:
+            return self.json_response(400, {"success": False, "message": str(exc)})
+
+    def refresh_rest_annotations(self):
+        try:
+            data = refresh_samples(
+                REST_ANNOTATION_DIR, SCORE_DIR, REST_ANNOTATION_EXPORTER,
+                REST_ANNOTATION_PYTHON, 800)
+            return self.json_response(200, {"success": True, "data": data,
+                                            "message": "已从乐谱任务刷新待标注样本"})
+        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            return self.json_response(409, {"success": False, "message": str(exc)})
+
+    def get_rest_annotation_image(self, sample_id):
+        try:
+            path = sample_image_path(REST_ANNOTATION_DIR, sample_id)
+            with open(path, "rb") as stream:
+                data = stream.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(data)
+        except (ValueError, OSError) as exc:
+            return self.json_response(404, {"success": False, "message": str(exc)})
+
+    def export_rest_annotations(self):
+        archive = None
+        try:
+            archive = build_training_archive(REST_ANNOTATION_DIR)
+            size = os.path.getsize(archive)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", "attachment; filename=rest-detector-coco.zip")
+            self.send_header("Cache-Control", "private, no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            with open(archive, "rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    self.wfile.write(chunk)
+        except (ValueError, OSError) as exc:
+            return self.json_response(409, {"success": False, "message": str(exc)})
+        finally:
+            if archive:
+                try: os.unlink(archive)
+                except OSError: pass
 
     def upload(self):
         data = self.body(8 * 1024 * 1024)

@@ -43,6 +43,10 @@ python ml/rest_detector/export_review_queue.py `
 
 重新执行时会保留已经人工修改过的 `annotation` 和 `state` 字段。
 
+管理后台的“休止符标注”页面会调用同一个导出器。页面支持接受 OMR 预标、拖框修正、标记困难负样本和暂时跳过。原 PDF、任务路径和用户文件名不会发送到浏览器。
+
+人工确认后可从管理后台导出 COCO ZIP。ZIP 只包含已接受、已修正和明确拒绝的裁片，并按整份 `documentSha256` 固定拆分到 train/validation/test；原 PDF 不会进入压缩包。
+
 ## 2. 数据拆分
 
 必须按 `documentSha256` 拆分 train/validation/test。同一份 PDF 的不同小节不能同时出现在训练集和测试集，否则指标会虚高。
