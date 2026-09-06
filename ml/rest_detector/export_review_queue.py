@@ -11,6 +11,8 @@ import json
 import os
 import re
 import zipfile
+import xml.etree.ElementTree as ET
+from collections import defaultdict
 from pathlib import Path
 
 import pymupdf as fitz
@@ -18,6 +20,14 @@ from PIL import Image
 
 
 VALID_STATES = {"unreviewed", "accepted", "corrected", "rejected", "skipped"}
+OMR_REST_CLASSES = {
+    "MAXIMA_REST": "maxima_rest", "LONG_REST": "long_rest",
+    "BREVE_REST": "breve_rest", "WHOLE_REST": "whole_rest",
+    "HALF_REST": "half_rest", "QUARTER_REST": "quarter_rest",
+    "EIGHTH_REST": "eighth_rest", "ONE_16TH_REST": "16th_rest",
+    "ONE_32ND_REST": "32nd_rest", "ONE_64TH_REST": "64th_rest",
+    "ONE_128TH_REST": "128th_rest", "MULTIPLE_REST": "multi_measure_rest",
+}
 
 
 def load_json(path):
@@ -104,6 +114,60 @@ def crop_omr_binary(archive, page_number, object_box, output_path):
                 "height": result.height, "prelabelBox": prelabel}
 
 
+def local_name(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+def omr_rest_candidates(archive):
+    candidates = []
+    if archive is None:
+        return candidates
+    for name in archive.namelist():
+        match = re.fullmatch(r"sheet#(\d+)/sheet#\1\.xml", name)
+        if not match:
+            continue
+        try:
+            root = ET.fromstring(archive.read(name))
+        except (ET.ParseError, KeyError):
+            continue
+        page = int(match.group(1))
+        for element in root.iter():
+            if local_name(element.tag) not in ("rest", "multiple-rest"):
+                continue
+            class_name = OMR_REST_CLASSES.get(element.get("shape", "").upper())
+            bounds = next((child for child in element if local_name(child.tag) == "bounds"), None)
+            if class_name is None or bounds is None:
+                continue
+            try:
+                x, y = float(bounds.get("x")), float(bounds.get("y"))
+                width, height = float(bounds.get("w")), float(bounds.get("h"))
+                box = [x, y, x + width, y + height]
+            except (TypeError, ValueError):
+                continue
+            if width <= 0 or height <= 0:
+                continue
+            candidates.append({
+                "page": page, "interId": element.get("id"), "class": class_name,
+                "bboxImage": box, "grade": element.get("grade"),
+                "contextGrade": element.get("ctx-grade"), "staff": element.get("staff"),
+            })
+    return candidates
+
+
+def sampled_omr_candidates(archive, document_hash, maximum_per_class):
+    grouped = defaultdict(list)
+    for candidate in omr_rest_candidates(archive):
+        material = "%s|%s|%s|%s" % (
+            document_hash, candidate["page"], candidate.get("interId"), candidate["bboxImage"])
+        candidate["sortKey"] = hashlib.sha256(material.encode("utf-8")).hexdigest()
+        grouped[candidate["class"]].append(candidate)
+    selected = []
+    for class_name in sorted(grouped):
+        selected.extend(sorted(grouped[class_name], key=lambda item: item["sortKey"])
+                        [:maximum_per_class])
+    return sorted(selected, key=lambda item: (item["page"], item["class"], item["sortKey"]))
+
+
 def job_directories(root):
     if (root / "input.pdf").is_file():
         return [root]
@@ -111,19 +175,23 @@ def job_directories(root):
                   if path.is_dir() and (path / "input.pdf").is_file())
 
 
-def export_job(job_dir, image_dir, dpi, previous):
+def export_job(job_dir, image_dir, dpi, previous, include_all_omr=False,
+               maximum_omr_per_class=25):
     rhythm_path = job_dir / "review" / "rhythm-gaps.json"
     rest_path = job_dir / "review" / "rest-classification.json"
     pdf_path = job_dir / "input.pdf"
-    if not rhythm_path.is_file() or not rest_path.is_file():
+    omr_path = job_dir / "omr" / "input.omr"
+    if (not rhythm_path.is_file() or not rest_path.is_file()) and not (
+            include_all_omr and omr_path.is_file()):
         return []
-    rhythm, rest = load_json(rhythm_path), load_json(rest_path)
+    rhythm = load_json(rhythm_path) if rhythm_path.is_file() else {"gaps": []}
+    rest = load_json(rest_path) if rest_path.is_file() else {"classifications": []}
     classes = classification_index(rest)
     document_hash = sha256(pdf_path)
     document = fitz.open(str(pdf_path))
-    omr_path = job_dir / "omr" / "input.omr"
     archive = zipfile.ZipFile(str(omr_path)) if omr_path.is_file() and zipfile.is_zipfile(str(omr_path)) else None
     records = []
+    used_omr_boxes = set()
     try:
         for gap in rhythm.get("gaps", []):
             if not isinstance(gap, dict) or not gap.get("id"):
@@ -145,6 +213,8 @@ def export_job(job_dir, image_dir, dpi, previous):
             image_name = "%s-%s.png" % (sample_id, safe_name(gap["id"]))
             image_path = image_dir / image_name
             if source_kind == "audiveris_binary":
+                used_omr_boxes.add((page_number,) + tuple(round(float(value), 2)
+                                                           for value in evidence.get("bboxImage")))
                 rendered = crop_omr_binary(archive, page_number, evidence.get("bboxImage"), image_path)
                 if rendered is None:
                     continue
@@ -191,6 +261,49 @@ def export_job(job_dir, image_dir, dpi, previous):
                 "annotator": old.get("annotator"), "reviewedAt": old.get("reviewedAt"),
             }
             records.append(record)
+        if include_all_omr:
+            for candidate in sampled_omr_candidates(
+                    archive, document_hash, maximum_omr_per_class):
+                page_number, box = candidate["page"], candidate["bboxImage"]
+                key = (page_number,) + tuple(round(float(value), 2) for value in box)
+                if key in used_omr_boxes:
+                    continue
+                sample_id = hashlib.sha256((
+                    document_hash + "|omr-rest|" + str(page_number) + "|" +
+                    str(candidate.get("interId")) + "|" + json.dumps(box)
+                ).encode("utf-8")).hexdigest()[:24]
+                image_name = "%s-omr-rest-p%s-%s.png" % (
+                    sample_id, page_number, safe_name(candidate.get("interId") or "unknown"))
+                image_path = image_dir / image_name
+                rendered = crop_omr_binary(archive, page_number, box, image_path)
+                if rendered is None:
+                    continue
+                old = previous.get(sample_id, {})
+                state = old.get("state") if old.get("state") in VALID_STATES else "unreviewed"
+                records.append({
+                    "schemaVersion": 1, "sampleId": sample_id,
+                    "image": "images/" + image_name,
+                    "imageWidth": rendered["width"], "imageHeight": rendered["height"],
+                    "documentSha256": document_hash, "sourceJobId": job_dir.name,
+                    "sourcePdfStored": False,
+                    "gapId": "omr-rest-p%s-%s" % (page_number, candidate.get("interId") or sample_id),
+                    "measureId": None, "page": page_number,
+                    "voice": None, "onset": None, "duration": None,
+                    "position": "omr_candidate", "crop": rendered["crop"],
+                    "cropCoordinateSystem": "audiveris_image_pixels",
+                    "cropBasis": "audiveris_binary_same_coordinate_space",
+                    "imageSource": "audiveris_binary", "dpi": None,
+                    "prelabel": {
+                        "class": candidate["class"],
+                        "bboxXyxy": rendered["prelabelBox"], "dots": 0,
+                        "grade": candidate.get("grade"),
+                        "contextGrade": candidate.get("contextGrade"),
+                        "source": "audiveris_internal_object",
+                    },
+                    "classificationStatus": "omr_candidate",
+                    "state": state, "annotation": old.get("annotation"),
+                    "annotator": old.get("annotator"), "reviewedAt": old.get("reviewedAt"),
+                })
     finally:
         if archive is not None:
             archive.close()
@@ -203,6 +316,8 @@ def main():
     parser.add_argument("--jobs-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dpi", type=int, default=800, choices=(400, 600, 800))
+    parser.add_argument("--include-all-omr-rests", action="store_true")
+    parser.add_argument("--max-omr-per-class-per-document", type=int, default=25)
     args = parser.parse_args()
     root, output = args.jobs_root.resolve(), args.output.resolve()
     if not root.is_dir():
@@ -213,7 +328,9 @@ def main():
     previous = existing_records(queue_path)
     records = []
     for job_dir in job_directories(root):
-        records.extend(export_job(job_dir, image_dir, args.dpi, previous))
+        records.extend(export_job(
+            job_dir, image_dir, args.dpi, previous, args.include_all_omr_rests,
+            max(1, min(200, args.max_omr_per_class_per_document))))
     records.sort(key=lambda item: (item["documentSha256"], item["page"], item["gapId"]))
     with queue_path.open("w", encoding="utf-8", newline="\n") as stream:
         for record in records:

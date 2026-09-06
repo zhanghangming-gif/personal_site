@@ -134,7 +134,7 @@ export function RestAnnotationPanel() {
 
   return <section>
     <div className="flex flex-wrap items-end justify-between gap-4">
-      <div><p className="eyebrow">REST DETECTOR DATA</p><h1 className="text-3xl font-black">休止符训练标注</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">只标注节奏缺口附近的局部裁片。绿色框是 OMR 预标，必须由人工接受或修正后才会进入模型训练。</p></div>
+      <div><p className="eyebrow">REST DETECTOR DATA</p><h1 className="text-3xl font-black">休止符训练标注</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">样本包含节奏缺口和全谱限量抽取的休止符候选。绿色框是 OMR 预标；裁片里每一个清楚可见的休止符都要单独标框，人工接受或修正后才会进入模型训练。</p></div>
       <div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => void refresh()} className="button-secondary"><RefreshCw size={16}/>{busy ? '处理中…' : '刷新样本'}</button><a href="/api/admin/rest-annotations/export" className="button-primary"><Download size={16}/>导出 COCO</a></div>
     </div>
     <div className="mt-6 grid gap-3 sm:grid-cols-3">

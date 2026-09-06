@@ -1,0 +1,57 @@
+[
+  {
+    "id": "mutopia-mozart-k581-clarinet",
+    "kind": "pdf",
+    "url": "https://www.mutopiaproject.org/ftp/MozartWA/KV581/k581/k581-clarinet-a4.pdf",
+    "sourcePage": "https://www.mutopiaproject.org/cgibin/piece-info.cgi?id=403",
+    "instrument": "clarinet",
+    "formatFamily": "lilypond-vector-part",
+    "rights": "Mutopia Project score; public-domain composition; redistribution terms are embedded in the PDF"
+  },
+  {
+    "id": "mutopia-cpe-bach-wq132-flute",
+    "kind": "pdf",
+    "url": "https://www.mutopiaproject.org/ftp/BachCPE/Wq132/Sonata_solo_flute_a_min-fl/Sonata_solo_flute_a_min-fl-a4.pdf",
+    "sourcePage": "https://www.mutopiaproject.org/ftp/BachCPE/Wq132/Sonata_solo_flute_a_min-fl/",
+    "instrument": "flute",
+    "formatFamily": "lilypond-vector-part",
+    "rights": "Mutopia Project score; Creative Commons terms are embedded in the PDF"
+  },
+  {
+    "id": "mutopia-bach-bwv1041-violin",
+    "kind": "pdf",
+    "url": "https://www.mutopiaproject.org/ftp/BachJS/BWV1041/bach-bwv1041-part-violin-solo/bach-bwv1041-part-violin-solo-a4.pdf",
+    "sourcePage": "https://www.mutopiaproject.org/ftp/BachJS/BWV1041/bach-bwv1041-part-violin-solo/",
+    "instrument": "violin",
+    "formatFamily": "lilypond-vector-part",
+    "rights": "Mutopia Project score; public-domain composition; redistribution terms are embedded in the PDF"
+  },
+  {
+    "id": "mutopia-bach-bwv781-keyboard",
+    "kind": "pdf",
+    "url": "https://www.mutopiaproject.org/ftp/BachJS/BWV781/bach-invention-10/bach-invention-10-a4.pdf",
+    "sourcePage": "https://www.mutopiaproject.org/ftp/BachJS/BWV781/bach-invention-10/",
+    "instrument": "keyboard",
+    "formatFamily": "lilypond-vector-grand-staff",
+    "rights": "Mutopia Project score; public-domain composition; redistribution terms are embedded in the PDF"
+  },
+  {
+    "id": "mutopia-bach-chorale-four-staff",
+    "kind": "pdf",
+    "url": "https://www.mutopiaproject.org/ftp/BachJS/O_Haupt_voll_Blut/O_Haupt_voll_Blut-a4.pdf",
+    "sourcePage": "https://www.mutopiaproject.org/ftp/BachJS/O_Haupt_voll_Blut/",
+    "instrument": "choir",
+    "formatFamily": "lilypond-vector-multi-staff",
+    "rights": "Mutopia Project score; public-domain composition; redistribution terms are embedded in the PDF"
+  },
+  {
+    "id": "loc-old-black-joe-1881-scan",
+    "kind": "loc_iiif",
+    "url": "https://www.loc.gov/item/2023840254/?fo=json",
+    "sourcePage": "https://www.loc.gov/item/2023840254/",
+    "maxPages": 5,
+    "instrument": "voice-keyboard",
+    "formatFamily": "historical-raster-scan",
+    "rights": "Library of Congress Music for the Nation collection; public domain and free to use and reuse"
+  }
+]

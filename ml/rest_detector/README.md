@@ -45,6 +45,8 @@ python ml/rest_detector/export_review_queue.py `
 
 管理后台的“休止符标注”页面会调用同一个导出器。页面支持接受 OMR 预标、拖框修正、标记困难负样本和暂时跳过。原 PDF、任务路径和用户文件名不会发送到浏览器。
 
+启用 `--include-all-omr-rests` 后，导出器还会从 Audiveris 的内部对象中按“每份文档、每个类别”限量抽取候选。这些仍然只是预标。`public_score_sources.json` 和 `ingest_public_scores.py` 用于把来源、许可和 SHA-256 一起记录到私有训练工作区，以增加乐器、谱表密度和扫描质量的覆盖。
+
 人工确认后可从管理后台导出 COCO ZIP。ZIP 只包含已接受、已修正和明确拒绝的裁片，并按整份 `documentSha256` 固定拆分到 train/validation/test；原 PDF 不会进入压缩包。
 
 ## 2. 数据拆分
