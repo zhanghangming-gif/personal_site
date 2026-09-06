@@ -122,12 +122,14 @@ def test_missing_meter_or_polyphonic_part_not_guessed(api):
 
 
 def gap_suggestion(position='trailing', onset='3', duration='1', status='supported_by_omr_object'):
+    supported = {'supported_by_omr_object', 'supported_by_visual_model',
+                 'supported_by_omr_and_visual_model'}
     return {
         'gapId': 'rhythm-gap-p1-m1-v1-1', 'measureId': 'p1-m1',
         'location': {'part': 1, 'measure': '1', 'page': 1, 'system': 1},
         'voice': '1', 'onset': onset, 'duration': duration, 'position': position,
         'status': status, 'notation': 'quarter_rest', 'notationLabel': '四分休止符',
-        'dots': 0, 'riskReasons': [], 'confirmable': status == 'supported_by_omr_object',
+        'dots': 0, 'riskReasons': [], 'confirmable': status in supported,
     }
 
 
@@ -157,6 +159,17 @@ def test_confirmed_trailing_rest_uses_server_evidence_and_precedes_barline(api):
     assert rest_note.findtext('type') == 'quarter'
     assert children[-1].tag == 'barline'
     assert log[0]['type'] == 'confirmRest'
+
+
+@pytest.mark.parametrize('status', [
+    'supported_by_visual_model', 'supported_by_omr_and_visual_model'])
+def test_confirmed_visual_rest_still_requires_server_bound_evidence(api, status):
+    from score_editor import apply_edits
+    root = three_quarters()
+    suggestion = gap_suggestion(status=status)
+    apply_edits(root, [{'type': 'confirmRest', 'gapId': suggestion['gapId']}],
+                {suggestion['gapId']: suggestion})
+    assert root.find('.//measure/note[last()]/rest') is not None
 
 
 def test_confirmed_internal_rest_replaces_exact_forward_without_moving_notes(api):

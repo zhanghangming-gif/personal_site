@@ -113,9 +113,14 @@ def editor_data(job_dir, read_xml):
                 continue
             item = by_gap[gap['id']]
             notation = item.get('suggestedNotation')
+            notation_sequence = [value for value in item.get('suggestedNotationSequence', [])
+                                 if value in REST_TYPES]
             evidence = item.get('selectedEvidence') or {}
             risks = [str(value) for value in gap.get('riskReasons', [])]
-            confirmable = (item.get('status') == 'supported_by_omr_object'
+            confirmable = (item.get('status') in (
+                               'supported_by_omr_object',
+                               'supported_by_visual_model',
+                               'supported_by_omr_and_visual_model')
                            and notation in REST_TYPES and not risks)
             rest_suggestions.append({
                 'gapId': gap['id'], 'measureId': gap.get('measureId'),
@@ -124,6 +129,9 @@ def editor_data(job_dir, read_xml):
                 'position': gap.get('position'), 'reviewRegion': gap.get('reviewRegion'),
                 'status': item.get('status'), 'notation': notation,
                 'notationLabel': REST_LABELS.get(notation, notation),
+                'notationSequence': notation_sequence,
+                'notationSequenceLabels': [REST_LABELS.get(value, value)
+                                           for value in notation_sequence],
                 'dots': item.get('suggestedDots') or 0,
                 'grade': evidence.get('grade'), 'contextGrade': evidence.get('contextGrade'),
                 'riskReasons': risks, 'confirmable': confirmable,
@@ -166,7 +174,9 @@ def carry_rest_review(parent_dir, child_dir, resolved_gap_ids):
                 counts[status] = counts.get(status, 0) + 1
             payload['summary'] = {
                 'gapCount': len(payload['classifications']), 'statusCounts': counts,
-                'supportedCount': counts.get('supported_by_omr_object', 0),
+                'supportedCount': sum(counts.get(status, 0) for status in (
+                    'supported_by_omr_object', 'supported_by_visual_model',
+                    'supported_by_omr_and_visual_model')),
             }
         save_json(os.path.join(output_dir, filename), payload)
 
@@ -266,7 +276,10 @@ def confirm_rest(root, change, confirmations):
     suggestion = confirmations.get(change['gapId'])
     if not isinstance(suggestion, dict):
         raise ValueError('休止符建议不存在或已经处理，请重新载入')
-    if (suggestion.get('status') != 'supported_by_omr_object'
+    if (suggestion.get('status') not in (
+                'supported_by_omr_object',
+                'supported_by_visual_model',
+                'supported_by_omr_and_visual_model')
             or suggestion.get('notation') not in REST_TYPES
             or suggestion.get('riskReasons')):
         raise ValueError('此项证据不足或存在节奏例外，不能快速补入；请下载 MusicXML 人工编辑')

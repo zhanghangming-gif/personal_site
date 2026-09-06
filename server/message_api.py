@@ -601,6 +601,20 @@ def parse_measure_number_value(value):
     return number if 0 < number < 10000 else None
 
 
+def integer_ocr_consensus(values, minimum_votes=2):
+    """Return a unique OCR majority without treating a failed pass as disagreement."""
+    counts = {}
+    for value in values:
+        if type(value) is int:
+            counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return None, False
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    winner, votes = ordered[0]
+    tied = len(ordered) > 1 and ordered[1][1] == votes
+    return (winner, True) if votes >= minimum_votes and not tied else (None, False)
+
+
 def analyze_audiveris_output(output):
     text = output or ""
     multirests = re.findall(r"Measure\{#([^}]+)\}\s+Multirest with no measure count", text)
@@ -931,12 +945,16 @@ def analyze_audiveris_book(path):
                                 stack.get("left", 0) - 12, item.get("staffTop", 0) - 140,
                                 stack.get("right", 0) + 12, item.get("staffTop", 0) - 5,
                             )
-                        for psm in ("7", "11"):
+                        # Music-font digits react differently to Tesseract page
+                        # segmentation modes. A unique majority is stronger than
+                        # requiring every successful mode to agree.
+                        for psm in ("6", "7", "10", "11"):
                             candidate = crop_number(page_image, ocr_bounds, 64, psm=psm)
                             if candidate is not None:
                                 ocr_values.append(candidate)
-                    ocr_consensus = bool(ocr_values) and len(ocr_values) >= 2 and len(set(ocr_values)) == 1
-                    ocr_value = ocr_values[0] if ocr_values else None
+                    ocr_value, ocr_consensus = integer_ocr_consensus(ocr_values)
+                    if ocr_value is None and ocr_values:
+                        ocr_value = ocr_values[0]
                     value = raw_value
                     if ocr_consensus and ocr_value is not None and ocr_value >= 2 and (
                         raw_value is None
@@ -1765,8 +1783,7 @@ def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unre
             position = detection.get("stackIndex")
             value = detection.get("value")
             if (type(position) is not int or type(value) is not int
-                    or value < 2 or value > 64 or position >= len(stacks)
-                    or position >= len(current_xml_system["measures"])):
+                    or value < 2 or value > 64 or position >= len(stacks)):
                 continue
             stack = stacks[position]
             if (stack.get("special") == "MULTI_REST"
@@ -1779,11 +1796,21 @@ def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unre
                 and detection.get("ocrValue") == value)
             if not (raw_confirmed or ocr_confirmed):
                 continue
-            measure = current_xml_system["measures"][position]
-            if measure_is_rest_only(measure):
+            measures = current_xml_system["measures"]
+            if not measures or position > len(measures):
+                continue
+            if position == len(measures):
+                # A page-end multirest can survive in the OMR graph as a
+                # cautionary stack while its MusicXML measure is omitted.
+                measure = measures[-1]
+                delta = value
+                operation = "append"
+            elif measure_is_rest_only(measures[position]):
+                measure = measures[position]
                 delta = value - effective_measure_span(measure)
                 operation = "set"
             else:
+                measure = measures[position]
                 delta = value
                 operation = "insert"
             if delta <= 0:
@@ -1816,7 +1843,8 @@ def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unre
                     operation for index, operation in enumerate(merged_operations)
                     if mask & (1 << index)
                 ]
-                if not any(operation["kind"] in ("insert", "set") for operation in selected):
+                if not any(operation["kind"] in ("append", "insert", "set")
+                           for operation in selected):
                     continue
                 if current_span + sum(operation["delta"] for operation in selected) == expected_span:
                     merged_masks.append(mask)
@@ -1835,6 +1863,10 @@ def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unre
                     measure_index = first_part_measures(root).index(operation["measure"])
                     changed = set_multirest_at_index(root, measure_index, operation["value"])
                     inserted = operation["measure"] if changed else None
+                elif operation["kind"] == "append":
+                    inserted = insert_rest_measures_after(
+                        root, operation["measure"], 1,
+                        multiple_rest_count=operation["value"])
                 else:
                     inserted = insert_multirest_before(
                         root, operation["measure"], operation["value"])
@@ -1848,7 +1880,7 @@ def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unre
                     "multipleRest": operation["value"],
                     "rawValue": detection.get("rawValue"),
                     "ocrValue": detection.get("ocrValue"),
-                    "inserted": operation["kind"] == "insert",
+                    "inserted": operation["kind"] in ("append", "insert"),
                     "reason": "休止横杠、计数与前后行首小节跨度形成唯一结构解",
                     "evidence": ("printed-count" if detection.get("rawValue") == operation["value"]
                                  else "two-pass-raster-count")

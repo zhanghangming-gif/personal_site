@@ -54,6 +54,28 @@ def safe_name(value):
     return re.sub(r"[^a-zA-Z0-9_-]", "-", str(value or "gap"))[:100]
 
 
+def infer_region(model, page, box, dpi, threshold):
+    scale = float(dpi) / 72.0
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
+                             clip=fitz.Rect(box), alpha=False)
+    image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    tensor = pil_to_tensor(image).float().div(255.0)
+    with torch.inference_mode():
+        prediction = model([tensor])[0]
+    rows = []
+    for detected_box, label, score in zip(
+            prediction["boxes"].tolist(), prediction["labels"].tolist(),
+            prediction["scores"].tolist()):
+        if score < threshold or len(rows) >= 24:
+            continue
+        pdf_box = [box[0] + detected_box[0] / scale,
+                   box[1] + detected_box[1] / scale,
+                   box[0] + detected_box[2] / scale,
+                   box[1] + detected_box[3] / scale]
+        rows.append((detected_box, int(label), float(score), pdf_box))
+    return image, rows
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("request")
@@ -69,7 +91,7 @@ def main():
     model, categories = create_model(checkpoint)
     threshold = max(0.01, min(0.99, float(request.get("scoreThreshold", 0.05))))
     dpi = max(144, min(600, int(request.get("dpi", 400))))
-    scale = float(dpi) / 72.0
+    adaptive_dpi = max(dpi, min(800, int(request.get("adaptiveDpi", dpi))))
     output_dir = request.get("cropOutputDir")
     if output_dir and not os.path.isdir(output_dir):
         os.makedirs(output_dir)
@@ -84,25 +106,19 @@ def main():
             box = valid_box(gap.get("bboxPdf"), page)
             if box is None:
                 continue
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
-                                     clip=fitz.Rect(box), alpha=False)
-            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            used_dpi = dpi
+            image, rows = infer_region(model, page, box, used_dpi, threshold)
+            adaptive_retry = False
+            if (adaptive_dpi > dpi and gap.get("position") == "full_measure"
+                    and not any(row[2] >= 0.35 for row in rows)):
+                used_dpi = adaptive_dpi
+                image, rows = infer_region(model, page, box, used_dpi, threshold)
+                adaptive_retry = True
             crop_name = safe_name(gap.get("gapId")) + ".png"
             if output_dir:
                 image.save(os.path.join(output_dir, crop_name))
-            tensor = pil_to_tensor(image).float().div(255.0)
-            with torch.inference_mode():
-                prediction = model([tensor])[0]
             detections = []
-            for detected_box, label, score in zip(
-                    prediction["boxes"].tolist(), prediction["labels"].tolist(),
-                    prediction["scores"].tolist()):
-                if score < threshold or len(detections) >= 24:
-                    continue
-                pdf_box = [box[0] + detected_box[0] / scale,
-                           box[1] + detected_box[1] / scale,
-                           box[0] + detected_box[2] / scale,
-                           box[1] + detected_box[3] / scale]
+            for detected_box, label, score, pdf_box in rows:
                 detections.append({
                     "class": categories.get(int(label), "unknown"),
                     "score": round(float(score), 6),
@@ -114,6 +130,9 @@ def main():
                 "bboxPdf": box, "crop": crop_name if output_dir else None,
                 "gapDuration": gap.get("gapDuration"), "position": gap.get("position"),
                 "expectedMeasureDuration": gap.get("expectedMeasureDuration"),
+                "staffGeometry": gap.get("staffGeometry"),
+                "mappingBasis": gap.get("mappingBasis"),
+                "dpi": used_dpi, "adaptiveRetry": adaptive_retry,
                 "detections": detections,
             })
     finally:
@@ -122,7 +141,7 @@ def main():
         "schemaVersion": 1, "engine": "pytorch_fasterrcnn_cpu",
         "modelVersion": os.path.basename(checkpoint_path),
         "modelSha256": file_digest(checkpoint_path),
-        "dpi": dpi, "scoreThreshold": threshold,
+        "dpi": dpi, "adaptiveDpi": adaptive_dpi, "scoreThreshold": threshold,
         "processedGapCount": len(results), "results": results,
         "elapsedSeconds": round(time.time() - started, 3),
     }

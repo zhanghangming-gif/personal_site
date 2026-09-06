@@ -242,6 +242,38 @@ def test_partial_multirest_never_commits_ocr_only_count(api, tmp_path):
     assert not (tmp_path / 'output.musicxml').exists()
 
 
+def test_integer_ocr_consensus_uses_unique_majority(api):
+    assert api.integer_ocr_consensus([3, 3, None, 4]) == (3, True)
+    assert api.integer_ocr_consensus([3, 4]) == (None, False)
+    assert api.integer_ocr_consensus([3]) == (None, False)
+
+
+def test_page_end_raster_multirest_can_append_when_span_is_unique(api, tmp_path):
+    measures = [make_measure(index) for index in range(1, 9)]
+    measures[-1].insert(0, ET.Element('print', {'new-system': 'yes'}))
+    source = tmp_path / 'source.musicxml'
+    output = tmp_path / 'output.musicxml'
+    ET.ElementTree(make_score([measures])).write(source)
+    analysis = {'systems': [
+        {'page': 1, 'system': 1, 'lineStart': 212, 'lineStartRaw': 212,
+         'stacks': [
+             *[{'special': '', 'duration': '1'} for _ in range(7)],
+             {'special': 'CAUTIONARY', 'duration': '0', 'multirestBar': True},
+         ],
+         'restCounts': [{
+             'stackIndex': 7, 'value': 3, 'rawValue': None, 'ocrValue': 3,
+             'ocrConsensus': True, 'geometry': 'raster-multirest-bar',
+         }]},
+        {'page': 2, 'system': 1, 'lineStart': 222, 'lineStartRaw': 222,
+         'stacks': [{'special': '', 'duration': '1'}], 'restCounts': []},
+    ]}
+    report = api.apply_verified_multirest_repairs(str(source), str(output), analysis)
+    assert report['safePartialOutput'] is True, report
+    assert report['partialRepairs'][0]['multipleRest'] == 3
+    assert report['partialRepairs'][0]['inserted'] is True
+    assert api.score_signature(str(output))['lineStartNumbers'] == ['1', '11']
+
+
 def test_existing_multirest_does_not_make_missing_count_ambiguous(api, tmp_path):
     measures = [make_measure(1, multirest=2), make_measure(2), make_measure(3), make_measure(4)]
     measures[3].insert(0, ET.Element('print', {'new-system': 'yes'}))

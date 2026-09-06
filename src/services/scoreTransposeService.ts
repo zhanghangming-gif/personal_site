@@ -159,8 +159,12 @@ export type EditorScore = {
     gapId: string; measureId: string; location: { part?: number; measure?: string; page?: number; system?: number };
     voice: string; onset: string; duration: string; position: 'leading' | 'internal' | 'trailing' | 'full_measure';
     reviewRegion?: { page?: number; bbox?: [number, number, number, number]; basis?: string };
-    status: 'supported_by_omr_object' | 'weak_omr_candidate' | 'ambiguous_candidates' | 'visual_confirmation_required';
-    notation?: string; notationLabel?: string; dots: number; grade?: number; contextGrade?: number;
+    status: 'supported_by_omr_object' | 'supported_by_visual_model' |
+      'supported_by_omr_and_visual_model' | 'visual_review_candidate' |
+      'visual_rest_sequence_candidate' | 'conflicting_visual_evidence' |
+      'weak_omr_candidate' | 'ambiguous_candidates' | 'visual_confirmation_required';
+    notation?: string; notationLabel?: string; notationSequence?: string[];
+    notationSequenceLabels?: string[]; dots: number; grade?: number; contextGrade?: number;
     riskReasons: string[]; confirmable: boolean; requiresSourceConfirmation: true;
   }>;
 };

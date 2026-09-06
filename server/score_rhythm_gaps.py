@@ -129,13 +129,17 @@ def coarse_review_region(measure, onset, duration, expected):
     padding = max(width * 0.08, 4.0)
     start = left + width * float(onset / expected)
     end = left + width * float((onset + duration) / expected)
-    return {
+    result = {
         "page": source.get("page"),
         "coordinateSystem": source.get("coordinateSystem", "pdf_points_top_left"),
         "bbox": [max(left, start - padding), top, min(right, end + padding), bottom],
         "basis": "measure_bbox_linear_time_hint",
+        "mappingBasis": source.get("basis"),
         "semanticVerification": False,
     }
+    if source.get("staffGeometry"):
+        result["staffGeometry"] = source["staffGeometry"]
+    return result
 
 
 def gap_position(onset, end, expected):

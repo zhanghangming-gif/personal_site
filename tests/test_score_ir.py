@@ -211,4 +211,6 @@ def test_model_review_regions_use_raw_omr_anchor_without_claiming_event_evidence
 
     unanchored = score_ir(score(note()))
     attach_model_review_regions(unanchored, {'systems': [dict(system, lineStartRaw=18)]}, preflight)
-    assert 'modelReviewRegion' not in unanchored['parts'][0]['measures'][0]
+    structural = unanchored['parts'][0]['measures'][0]['modelReviewRegion']
+    assert structural['basis'] == 'musicxml_omr_system_order_and_pdf_barlines_review_only'
+    assert structural['staffGeometry']['lineYs'] == [100, 105, 110, 115, 120]

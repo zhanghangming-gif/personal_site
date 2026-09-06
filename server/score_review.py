@@ -32,6 +32,17 @@ def save_json(path, data):
     os.replace(temporary, path)
 
 
+def staff_geometry(staff):
+    top, spacing = staff.get('top'), staff.get('spacing')
+    if not isinstance(top, (int, float)) or not isinstance(spacing, (int, float)) or spacing <= 0:
+        return None
+    return {
+        'top': top, 'spacing': spacing,
+        'lineYs': [round(top + index * spacing, 4) for index in range(5)],
+        'coordinateSystem': 'pdf_points_top_left',
+    }
+
+
 def attach_measure_regions(index, analysis, preflight):
     """Map only anchored, single-staff systems with unambiguous bar counts.
 
@@ -71,6 +82,7 @@ def attach_measure_regions(index, analysis, preflight):
                                min(geometry['height'], staff['top'] + 10 * staff['spacing'])],
                       'basis': 'pdf_barlines_and_printed_measure_anchor',
                       'semanticVerification': False}
+            region['staffGeometry'] = staff_geometry(staff)
             measure['sourceRegion'] = region
             for event in measure['events']:
                 event['evidence']['measureRegion'] = region
@@ -95,7 +107,13 @@ def attach_model_review_regions(index, analysis, preflight):
         loc = measure['location']
         groups.setdefault((loc['page'], loc['system']), []).append(measure)
     pages = {p['page']: p.get('geometry', {}) for p in preflight.get('pageDetails', [])}
-    mapped = 0
+    page_systems = {}
+    for page, system in groups:
+        page_systems.setdefault(page, set()).add(system)
+    analysis_page_systems = {}
+    for system in analysis.get('systems', []):
+        analysis_page_systems.setdefault(system.get('page'), set()).add(system.get('system'))
+    mapped, anchored, structural = 0, 0, 0
     for system in analysis.get('systems', []):
         measures = groups.get((system['page'], system['system']), [])
         staff, geometry = system.get('pdfStaff'), pages.get(system['page'], {})
@@ -103,15 +121,22 @@ def attach_model_review_regions(index, analysis, preflight):
             continue
         if any(stack.get('special') for stack in system.get('stacks', [])):
             continue
-        anchor = system.get('lineStartRaw')
-        if anchor is None or str(anchor) != measures[0]['location']['measure']:
-            continue
         bars = [x for x in staff['barlines'] if x > staff['left'] + 2 * staff['spacing']]
         if (len(bars) != len(measures) or len(measures) != system.get('rawMeasures') or
                 not bars or abs(bars[-1] - staff['right']) > staff['spacing']):
             continue
         if not geometry.get('width') or not geometry.get('height'):
             continue
+        anchor = system.get('lineStartRaw')
+        anchor_matches = anchor is not None and str(anchor) == measures[0]['location']['measure']
+        page_order_matches = (
+            page_systems.get(system['page']) == analysis_page_systems.get(system['page'])
+        )
+        if not anchor_matches and not page_order_matches:
+            continue
+        basis = ('audiveris_raw_line_anchor_and_pdf_barlines_review_only'
+                 if anchor_matches else
+                 'musicxml_omr_system_order_and_pdf_barlines_review_only')
         left = staff['left']
         for measure, right in zip(measures, bars):
             if 'sourceRegion' not in measure:
@@ -121,12 +146,20 @@ def attach_model_review_regions(index, analysis, preflight):
                              max(0, staff['top'] - 5 * staff['spacing']),
                              min(geometry['width'], right + staff['spacing']),
                              min(geometry['height'], staff['top'] + 10 * staff['spacing'])],
-                    'basis': 'audiveris_raw_line_anchor_and_pdf_barlines_review_only',
+                    'basis': basis,
                     'semanticVerification': False,
+                    'staffGeometry': staff_geometry(staff),
                 }
                 mapped += 1
+                if anchor_matches:
+                    anchored += 1
+                else:
+                    structural += 1
             left = right
     index['coverage']['mappedModelReviewMeasures'] = mapped
+    index['coverage']['modelReviewRegionBasis'] = {
+        'rawLineAnchor': anchored, 'pageSystemOrder': structural,
+    }
 
 
 def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml,

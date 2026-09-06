@@ -90,11 +90,12 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
             const active = activeRestGap === item.gapId;
             const box = item.reviewRegion?.bbox;
             const page = item.reviewRegion?.page ?? item.location.page;
+            const sequenceLabel = item.notationSequenceLabels?.join(' + ');
             const regionUrl = box && page ? `/api/score/transpositions/${encodeURIComponent(jobId)}/region-image?role=source&page=${page}&dpi=800&x0=${encodeURIComponent(box[0])}&y0=${encodeURIComponent(box[1])}&x1=${encodeURIComponent(box[2])}&y1=${encodeURIComponent(box[3])}` : '';
             return <article key={item.gapId} className="rounded-xl border border-sky-500/25 bg-[rgb(var(--surface))] p-4">
               <p className="font-bold">{en ? `Measure ${item.location.measure ?? '?'}, voice ${item.voice}` : `第 ${item.location.measure ?? '?'} 小节 · 声部 ${item.voice}`}</p>
               <p className="mt-1 text-sm">{en ? `Gap at ${item.onset}, duration ${item.duration} quarter notes` : `起点 ${item.onset}，缺少 ${item.duration} 个四分音符时值`}</p>
-              <p className="mt-1 text-sm">{item.notationLabel ? (en ? `Candidate: ${item.notationLabel}` : `候选：${item.notationLabel}${item.dots ? `（${item.dots} 个附点）` : ''}`) : (en ? 'No unique rest candidate' : '没有唯一的休止符候选')}</p>
+              <p className="mt-1 text-sm">{item.notationLabel ? (en ? `Candidate: ${item.notationLabel}` : `候选：${item.notationLabel}${item.dots ? `（${item.dots} 个附点）` : ''}`) : sequenceLabel ? (en ? `Candidate sequence: ${sequenceLabel}` : `候选组合：${sequenceLabel}`) : (en ? 'No unique rest candidate' : '没有唯一的休止符候选')}</p>
               <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-300">{item.confirmable ? (en ? 'Strong OMR object match; source confirmation is still required.' : 'OMR 内部对象与缺失时值唯一匹配，仍须对照原谱确认。') : (en ? 'Evidence is weak or ambiguous. Inspect and edit the exported MusicXML manually.' : '证据较弱或存在歧义，只提供定位；请在导出的 MusicXML 中人工修改。')}</p>
               {regionUrl && <button type="button" className="button-secondary mt-3 text-sm" onClick={() => { setActiveRestGap(active ? '' : item.gapId); setEventRestConfirmed(false); }}>{active ? (en ? 'Close source crop' : '收起原谱局部') : (en ? 'Inspect source crop' : '查看原谱局部')}</button>}
               {active && regionUrl && <div className="mt-3 overflow-hidden rounded-xl border bg-white p-2"><img src={regionUrl} alt={en ? `Source measure ${item.location.measure ?? ''}` : `原谱第 ${item.location.measure ?? ''} 小节局部`} className="max-h-72 w-full object-contain" /></div>}
