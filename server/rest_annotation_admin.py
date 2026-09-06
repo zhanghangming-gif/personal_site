@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import threading
 import zipfile
+from collections import defaultdict
 from datetime import datetime, timezone
 
 
@@ -97,11 +98,35 @@ def _public_item(item):
     return result
 
 
+def _balanced_review_order(records):
+    buckets = defaultdict(list)
+    for item in records:
+        class_name = (item.get("prelabel") or {}).get("class") or "no_prelabel"
+        buckets[(item.get("documentSha256") or "", class_name)].append(item)
+    for values in buckets.values():
+        values.sort(key=lambda item: item.get("sampleId") or "")
+    keys = sorted(buckets, key=lambda key: hashlib.sha256(
+        (key[0] + "|" + key[1]).encode("utf-8")).hexdigest())
+    ordered = []
+    while keys:
+        remaining = []
+        for key in keys:
+            values = buckets[key]
+            if values:
+                ordered.append(values.pop(0))
+            if values:
+                remaining.append(key)
+        keys = remaining
+    return ordered
+
+
 def list_samples(dataset_dir, state="all", offset=0, limit=40):
     with _LOCK:
         records = _read_records(dataset_dir)
     state = state if state in VALID_STATES else "all"
     selected = records if state == "all" else [item for item in records if item.get("state", "unreviewed") == state]
+    if state == "unreviewed":
+        selected = _balanced_review_order(selected)
     offset = max(0, int(offset))
     limit = min(100, max(1, int(limit)))
     counts = {name: 0 for name in sorted(VALID_STATES)}

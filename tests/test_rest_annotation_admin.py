@@ -10,7 +10,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 
 from rest_annotation_admin import (  # noqa: E402
-    build_training_archive, list_samples, sample_image_path, update_sample,
+    _balanced_review_order, build_training_archive, list_samples, sample_image_path, update_sample,
 )
 
 
@@ -107,3 +107,14 @@ def test_image_path_cannot_escape_dataset(tmp_path):
     (tmp_path / 'queue.jsonl').write_text(json.dumps(record) + '\n', encoding='utf-8')
     with pytest.raises(ValueError, match='不存在'):
         sample_image_path(str(tmp_path), record['sampleId'])
+
+
+def test_unreviewed_order_round_robins_across_documents_and_classes():
+    def item(sample, document, class_name):
+        return {'sampleId': sample, 'documentSha256': document,
+                'prelabel': {'class': class_name}}
+    records = [item('a1', 'a', 'quarter_rest'), item('a2', 'a', 'quarter_rest'),
+               item('a3', 'a', 'quarter_rest'), item('b1', 'b', 'half_rest'),
+               item('c1', 'c', 'whole_rest')]
+    ordered = _balanced_review_order(records)
+    assert {entry['documentSha256'] for entry in ordered[:3]} == {'a', 'b', 'c'}
