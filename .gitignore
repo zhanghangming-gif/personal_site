@@ -32,3 +32,11 @@ score-compiler-*.tar.gz
 *.bak
 *.backup*
 *.prev*
+
+# Local visual-model datasets, checkpoints and experiment output
+ml/rest_detector/data/
+ml/rest_detector/runs/
+ml/rest_detector/checkpoints/
+*.pt
+*.pth
+*.onnx

@@ -1,0 +1,14 @@
+[
+  "maxima_rest",
+  "long_rest",
+  "breve_rest",
+  "whole_rest",
+  "half_rest",
+  "quarter_rest",
+  "eighth_rest",
+  "16th_rest",
+  "32nd_rest",
+  "64th_rest",
+  "128th_rest",
+  "multi_measure_rest"
+]
