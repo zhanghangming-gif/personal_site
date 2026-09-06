@@ -53,6 +53,8 @@ python ml/rest_detector/export_review_queue.py `
 
 必须按 `documentSha256` 拆分 train/validation/test。同一份 PDF 的不同小节不能同时出现在训练集和测试集，否则指标会虚高。
 
+导出器还会按 PNG 内容哈希删除重复裁片。同一画面被重复标注时，优先保留目标更完整的人工修正版，并在 `dataset-manifest.json` 报告重复数和冲突组数。验证集、测试集至少按完整文档分配，只有一个文档出现的稀有类别会保留在训练集。
+
 初版目标：
 
 - 20,000 个合成小节；
@@ -62,9 +64,24 @@ python ml/rest_detector/export_review_queue.py `
 
 ## 3. 训练基线
 
-先用 TorchVision Faster R-CNN + FPN。6 GB 显存建议小节裁片宽度不超过 1280 px、batch size 1–2，并启用自动混合精度。
+先用 TorchVision Faster R-CNN MobileNetV3 + FPN。6 GB 显存建议 batch size 1–2。混合精度默认关闭；只有在多轮训练没有出现非有限损失时才加 `--amp`。
 
-Windows CUDA 12.8 环境可参考 PyTorch 官方版本页面安装匹配的 `torch` 和 `torchvision`。模型代码在数据标注流程稳定后加入，避免在错误标签上训练。
+Windows CUDA 12.8 本地训练环境：
+
+```powershell
+py -3.12 -m venv ml/rest_detector/.venv
+ml/rest_detector/.venv/Scripts/python -m pip install --upgrade pip
+ml/rest_detector/.venv/Scripts/pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+ml/rest_detector/.venv/Scripts/pip install -r ml/rest_detector/requirements.txt
+
+ml/rest_detector/.venv/Scripts/python ml/rest_detector/train_torchvision.py `
+  --data ml/rest_detector/data/reviewed-v1 `
+  --output ml/rest_detector/runs/pilot-v1 `
+  --epochs 30 `
+  --batch-size 2
+```
+
+`metrics.json` 分别保存验证集和测试集的 mAP@0.5、每类 AP 和最大召回率；`best.pt` 是验证集表现最好的检查点。100–200 个裁片只作为早期基线，不能满足自动修改乐谱的上线门槛。
 
 ## 4. 上线门槛
 

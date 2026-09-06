@@ -256,9 +256,105 @@ def refresh_samples(dataset_dir, jobs_root, exporter_path, python_path, dpi=800)
     return list_samples(dataset_dir, "all", 0, 1)
 
 
-def _document_split(document_hash):
-    value = int(hashlib.sha256(document_hash.encode("ascii")).hexdigest()[:8], 16) % 100
-    return "train" if value < 70 else ("validation" if value < 85 else "test")
+def _training_record_rank(item):
+    targets = (item.get("annotation") or {}).get("targets") or []
+    state_rank = {"corrected": 3, "accepted": 2, "rejected": 1}.get(item.get("state"), 0)
+    return (len(targets), state_rank, item.get("reviewedAt") or "", item.get("sampleId") or "")
+
+
+def _deduplicate_training_records(dataset_dir, records):
+    """Keep one reviewed annotation for byte-identical crops.
+
+    Repeated OMR jobs can produce the same crop under different sample ids.  A
+    detector must not see those copies as independent evidence.  When humans
+    drew slightly different boxes on identical pixels, prefer the annotation
+    that covers more visible rests, then a corrected/newer annotation.
+    """
+    groups = defaultdict(list)
+    for item in records:
+        path = sample_image_path(dataset_dir, item["sampleId"])
+        digest = hashlib.sha256()
+        with open(path, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        groups[digest.hexdigest()].append(item)
+    selected = []
+    conflict_count = 0
+    for image_hash, copies in groups.items():
+        signatures = set()
+        for item in copies:
+            targets = (item.get("annotation") or {}).get("targets") or []
+            signatures.add(json.dumps(targets, ensure_ascii=False, sort_keys=True))
+        if len(signatures) > 1:
+            conflict_count += 1
+        winner = max(copies, key=_training_record_rank)
+        winner = dict(winner)
+        winner["trainingImageSha256"] = image_hash
+        selected.append(winner)
+    selected.sort(key=lambda item: item.get("sampleId") or "")
+    return selected, len(records) - len(selected), conflict_count
+
+
+def _assign_document_splits(records):
+    """Assign whole documents while balancing both documents and sample volume."""
+    documents = defaultdict(list)
+    class_documents = defaultdict(set)
+    for item in records:
+        document = item.get("documentSha256") or "unknown"
+        documents[document].append(item)
+        for target in (item.get("annotation") or {}).get("targets") or []:
+            if target.get("class"):
+                class_documents[target["class"]].add(document)
+    count = len(documents)
+    if count == 1:
+        return {next(iter(documents)): "train"}
+    if count == 2:
+        names = sorted(documents, key=lambda name: (-len(documents[name]), name))
+        return {names[0]: "train", names[1]: "validation"}
+
+    validation_slots = max(1, int(round(count * 0.15)))
+    test_slots = max(1, int(round(count * 0.15)))
+    if validation_slots + test_slots >= count:
+        validation_slots = test_slots = 1
+    slots = {
+        "train": count - validation_slots - test_slots,
+        "validation": validation_slots,
+        "test": test_slots,
+    }
+    total = float(len(records))
+    target_samples = {"train": total * 0.70, "validation": total * 0.15, "test": total * 0.15}
+    assigned_documents = {name: 0 for name in slots}
+    assigned_samples = {name: 0 for name in slots}
+    result = {}
+    must_train = set()
+    for sources in class_documents.values():
+        if len(sources) == 1:
+            must_train.update(sources)
+    class_counts = defaultdict(lambda: defaultdict(int))
+    for document, items in documents.items():
+        for item in items:
+            for target in (item.get("annotation") or {}).get("targets") or []:
+                if target.get("class"):
+                    class_counts[target["class"]][document] += 1
+    for counts in class_counts.values():
+        must_train.add(max(counts, key=lambda name: (counts[name], name)))
+    must_train.update(item.get("documentSha256") or "unknown" for item in records
+                      if item.get("state") == "rejected")
+    ranked = sorted(documents, key=lambda name: (-len(documents[name]), hashlib.sha256(
+        ("rest-split-v2|" + name).encode("utf-8")).hexdigest()))
+    ordered = [name for name in ranked if name in must_train]
+    ordered.extend(name for name in ranked if name not in must_train)
+    priority = {"train": 0, "validation": 1, "test": 2}
+    for document in ordered:
+        candidates = (["train"] if document in must_train and
+                      assigned_documents["train"] < slots["train"] else
+                      [name for name in slots if assigned_documents[name] < slots[name]])
+        split = min(candidates, key=lambda name: (
+            assigned_samples[name] / max(1.0, target_samples[name]), priority[name]))
+        result[document] = split
+        assigned_documents[split] += 1
+        assigned_samples[split] += len(documents[document])
+    return result
 
 
 def build_training_archive(dataset_dir):
@@ -268,6 +364,9 @@ def build_training_archive(dataset_dir):
                    if item.get("state") in TRAINING_STATES]
         if not records:
             raise ValueError("还没有可导出的人工确认样本")
+        reviewed_count = len(records)
+        records, duplicate_count, conflict_count = _deduplicate_training_records(dataset_dir, records)
+        document_splits = _assign_document_splits(records)
         descriptor, archive_path = tempfile.mkstemp(prefix="rest-training-", suffix=".zip")
         os.close(descriptor)
         categories = [{"id": index + 1, "name": name}
@@ -279,7 +378,7 @@ def build_training_archive(dataset_dir):
         try:
             with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
                 for image_id, item in enumerate(records, 1):
-                    split = _document_split(item.get("documentSha256", ""))
+                    split = document_splits[item.get("documentSha256") or "unknown"]
                     source = sample_image_path(dataset_dir, item["sampleId"])
                     filename = "%s/%s.png" % (split, item["sampleId"])
                     archive.write(source, "images/" + filename)
@@ -288,6 +387,9 @@ def build_training_archive(dataset_dir):
                         "width": item.get("imageWidth"), "height": item.get("imageHeight"),
                         "document_sha256": item.get("documentSha256"),
                         "sample_id": item.get("sampleId"),
+                        "image_sha256": item.get("trainingImageSha256"),
+                        "review_state": item.get("state"),
+                        "reviewed_at": item.get("reviewedAt"),
                     })
                     targets = (item.get("annotation") or {}).get("targets") or []
                     for target in targets:
@@ -306,8 +408,14 @@ def build_training_archive(dataset_dir):
                 archive.writestr("dataset-manifest.json", json.dumps({
                     "schemaVersion": 1, "createdAt": _utcnow(),
                     "sampleCount": len(records),
+                    "reviewedSampleCount": reviewed_count,
+                    "duplicateSampleCount": duplicate_count,
+                    "conflictingDuplicateGroupCount": conflict_count,
                     "documentCount": len(set(item.get("documentSha256") for item in records)),
                     "splitBy": "documentSha256", "sourcePdfIncluded": False,
+                    "splits": {name: sum(1 for item in records if
+                                          document_splits[item.get("documentSha256") or "unknown"] == name)
+                               for name in ("train", "validation", "test")},
                 }, ensure_ascii=False, indent=2))
             return archive_path
         except Exception:

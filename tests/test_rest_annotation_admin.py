@@ -10,7 +10,8 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 
 from rest_annotation_admin import (  # noqa: E402
-    _balanced_review_order, build_training_archive, list_samples, sample_image_path, update_sample,
+    _assign_document_splits, _balanced_review_order, build_training_archive, list_samples,
+    sample_image_path, update_sample,
 )
 
 
@@ -118,3 +119,48 @@ def test_unreviewed_order_round_robins_across_documents_and_classes():
                item('c1', 'c', 'whole_rest')]
     ordered = _balanced_review_order(records)
     assert {entry['documentSha256'] for entry in ordered[:3]} == {'a', 'b', 'c'}
+
+
+def test_document_split_balances_large_sources_without_leakage():
+    records = []
+    for document, count in [('a', 30), ('b', 24), ('c', 18), ('d', 8), ('e', 7),
+                            ('f', 6), ('g', 5), ('h', 4), ('i', 3), ('j', 2)]:
+        records.extend({'documentSha256': document, 'sampleId': '%s-%d' % (document, index)}
+                       for index in range(count))
+    assigned = _assign_document_splits(records)
+    assert set(assigned.values()) == {'train', 'validation', 'test'}
+    assert sum(1 for split in assigned.values() if split == 'validation') == 2
+    assert sum(1 for split in assigned.values() if split == 'test') == 2
+
+
+def test_coco_export_deduplicates_identical_crops_and_keeps_richer_correction(tmp_path):
+    first = seed_dataset(tmp_path)
+    first['state'] = 'accepted'
+    first['annotation'] = {'targets': [{
+        'class': 'whole_rest', 'bboxXyxy': [80, 40, 120, 55], 'dots': 0,
+    }], 'reason': ''}
+    second = dict(first)
+    second['sampleId'] = 'b' * 24
+    second['state'] = 'corrected'
+    second['image'] = 'images/sample-copy.png'
+    second['annotation'] = {'targets': [
+        {'class': 'whole_rest', 'bboxXyxy': [80, 40, 120, 55], 'dots': 0},
+        {'class': 'quarter_rest', 'bboxXyxy': [20, 20, 35, 70], 'dots': 0},
+    ], 'reason': ''}
+    (tmp_path / 'images' / 'sample-copy.png').write_bytes(
+        (tmp_path / 'images' / 'sample.png').read_bytes())
+    (tmp_path / 'queue.jsonl').write_text(
+        json.dumps(first) + '\n' + json.dumps(second) + '\n', encoding='utf-8')
+    archive = build_training_archive(str(tmp_path))
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            payloads = [json.loads(bundle.read('annotations/%s.json' % split))
+                        for split in ('train', 'validation', 'test')]
+            assert sum(len(payload['images']) for payload in payloads) == 1
+            assert sum(len(payload['annotations']) for payload in payloads) == 2
+            manifest = json.loads(bundle.read('dataset-manifest.json'))
+            assert manifest['reviewedSampleCount'] == 2
+            assert manifest['duplicateSampleCount'] == 1
+            assert manifest['conflictingDuplicateGroupCount'] == 1
+    finally:
+        os.unlink(archive)
