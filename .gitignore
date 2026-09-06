@@ -14,6 +14,8 @@ __pycache__/
 .DS_Store
 *.log
 *.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 
 # Generated score jobs, user uploads and runtime state
 tmp/
