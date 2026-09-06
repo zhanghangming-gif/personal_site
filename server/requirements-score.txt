@@ -1,0 +1,4 @@
+pypdf==6.12.2
+fonttools==4.64.0
+pymupdf==1.26.4
+Pillow==11.3.0

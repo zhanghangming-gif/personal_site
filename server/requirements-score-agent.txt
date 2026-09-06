@@ -1,0 +1,4 @@
+# Additional libraries for the isolated Python 3.11 score agent worker.
+Pillow==11.3.0
+numpy==2.2.6
+reportlab==4.4.3

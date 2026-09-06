@@ -1,0 +1,32 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+!server/.env.example
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+*.log
+*.tsbuildinfo
+
+# Generated score jobs, user uploads and runtime state
+tmp/
+output/
+artifacts/
+uploads/
+score-transpose/
+*.db
+*.sqlite*
+
+# Deployment archives and local backups
+deploy-*.tar.gz
+score-compiler-*.tar.gz
+*.bak
+*.backup*
+*.prev*

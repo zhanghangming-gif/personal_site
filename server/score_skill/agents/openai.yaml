@@ -1,0 +1,4 @@
+interface:
+  display_name: "乐谱 PDF 移调"
+  short_description: "乐谱 PDF 转调后输出 PDF，保留分页、编号、节奏及全部演奏标记"
+  default_prompt: "请使用 $score-pdf-transpose 将这份 A 调单簧管 PDF 转为降 B 调，保持实际音高不变，保留原谱小节数、分页、页码、左侧编号、节奏、力度和所有演奏标记，逐音核对后输出 PDF。"

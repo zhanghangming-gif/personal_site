@@ -1,0 +1,26 @@
+[
+  {
+    "adapter": "nabucco1",
+    "sha256": "f330b0de274386f9c48a068e9f9e8fb0217d819106a25d1146166a0f6a225d7e",
+    "reference_name": "IMSLP311741-PMLP51151-1064-Verdi-Nabucco-Ouverture-Clarinet1.pdf",
+    "notes": 954,
+    "interval_semitones": -1,
+    "interval_diatonic_steps": -1
+  },
+  {
+    "adapter": "nabucco2",
+    "sha256": "385f3deb1ca2cf010160eb06cf569472618bca8d417d9b7b0832b93271a46b76",
+    "reference_name": "IMSLP311741-PMLP51151-1064-Verdi-Nabucco-Ouverture-Clarinet2.pdf",
+    "notes": 696,
+    "interval_semitones": -1,
+    "interval_diatonic_steps": -1
+  },
+  {
+    "adapter": "wanquan",
+    "sha256": "67cb3cabef6f0aa8f4dcb6afa769bb97b94b53e4349273f25e6e2eaf54b89d88",
+    "reference_name": "万泉河水 - 单簧管.pdf",
+    "notes": 200,
+    "interval_semitones": -1,
+    "interval_diatonic_steps": -1
+  }
+]
