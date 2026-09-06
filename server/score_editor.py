@@ -1,4 +1,5 @@
 """Explicitly unverified candidate export and versioned, bounded note edits."""
+import copy
 import json
 import os
 import re
@@ -375,9 +376,15 @@ def rational(raw):
 
 
 def insert_rests(root, change):
-    """User-positioned whole-bar rests; never infer missing music from a gap."""
-    if set(change) != {'type', 'measureId', 'count'} or type(change['count']) is not int or not 1 <= change['count'] <= 64:
+    """Insert a user-confirmed whole-bar or grouped multi-measure rest."""
+    allowed = ({'type', 'measureId', 'count'},
+               {'type', 'measureId', 'count', 'placement'})
+    if (set(change) not in allowed or type(change.get('count')) is not int
+            or not 1 <= change['count'] <= 64):
         raise ValueError('每次可补入 1 至 64 个整小节休止')
+    placement = change.get('placement', 'after')
+    if placement not in ('before', 'after'):
+        raise ValueError('请选择在目标小节之前或之后补入')
     parts = [p for p in root if local(p.tag) == 'part']
     if len(parts) != 1:
         raise ValueError('补小节目前仅支持单乐器声部；多声部总谱请先导出 MusicXML 校正')
@@ -389,7 +396,7 @@ def insert_rests(root, change):
     position = ids.index(change['measureId'])
     reference = measures[position]
     divisions, time = None, None
-    active_ties = set()
+    boundary = position if placement == 'before' else position + 1
     for m in measures[:position + 1]:
         attrs = child(m, 'attributes')
         if attrs is not None:
@@ -402,6 +409,9 @@ def insert_rests(root, change):
         for n in (n for n in m if local(n.tag) == 'note'):
             if value(n, 'staff', '1') != '1':
                 raise ValueError('补小节目前仅支持单谱表')
+    active_ties = set()
+    for m in measures[:boundary]:
+        for n in (n for n in m if local(n.tag) == 'note'):
             p = child(n, 'pitch')
             key = (value(n, 'voice', '1'), value(p, 'step'), value(p, 'alter', '0'), value(p, 'octave')) if p is not None else None
             for tie in (t for t in n if local(t.tag) == 'tie'):
@@ -425,26 +435,90 @@ def insert_rests(root, change):
             raise ValueError()
     except (ValueError, ZeroDivisionError):
         raise ValueError('拍号与时值单位不兼容，暂不能补入整小节休止')
-    if any(local(n.tag) == 'multiple-rest' for n in reference.iter()):
-        raise ValueError('请在普通小节后补休止；已有多小节休止需要另行校正计数')
+    multiple_rest_nodes = [n for n in reference.iter() if local(n.tag) == 'multiple-rest']
+    reference_notes = [n for n in reference if local(n.tag) == 'note']
+    reusable_placeholder = (
+        placement == 'before'
+        and len(multiple_rest_nodes) == 1
+        and (multiple_rest_nodes[0].text or '').strip() == '1'
+        and reference_notes
+        and all(child(n, 'rest') is not None and
+                child(n, 'rest').get('measure') == 'yes' for n in reference_notes)
+    )
+    if multiple_rest_nodes and not reusable_placeholder:
+        raise ValueError('请选择相邻的普通小节作为插入位置；已有多小节休止请勿重复添加')
     number = reference.get('number', '')
-    later = measures[position + 1:]
+    later = (measures[position + 1:] if reusable_placeholder
+             else measures[position if placement == 'before' else position + 1:])
     if not number.isdigit() or any(not m.get('number', '').isdigit() for m in later):
         raise ValueError('此谱包含非数字小节号，暂不自动改动编号')
-    # All validation precedes mutation. Existing notes, marks and page breaks
-    # stay on their original measures. Numeric following labels move forward.
-    for offset in range(1, change['count'] + 1):
-        m = ET.Element(tag(reference, 'measure'), {'number': str(int(number) + offset)})
-        n = ET.SubElement(m, tag(reference, 'note'))
-        ET.SubElement(n, tag(reference, 'rest'), {'measure': 'yes'})
-        ET.SubElement(n, tag(reference, 'duration')).text = str(int(duration))
-        ET.SubElement(n, tag(reference, 'voice')).text = '1'
-        part.insert(list(part).index(reference) + offset, m)
+
+    # MuseScore needs both the grouping marker and every underlying empty
+    # measure. The PDF collapses them to one bar labelled with the count, while
+    # the MusicXML timeline and all later measure numbers remain truthful.
+    count = change['count']
+    shift = count - 1 if reusable_placeholder else count
+
+    def rest_note(template):
+        note = ET.Element(tag(template, 'note'))
+        ET.SubElement(note, tag(template, 'rest'), {'measure': 'yes'})
+        ET.SubElement(note, tag(template, 'duration')).text = str(int(duration))
+        ET.SubElement(note, tag(template, 'voice')).text = '1'
+        return note
+
+    inserted_number = int(number) if placement == 'before' else int(number) + 1
+    if reusable_placeholder:
+        inserted = reference
+        first_note = reference_notes[0]
+        first_note.attrib.pop('print-object', None)
+        if child(first_note, 'voice') is None:
+            ET.SubElement(first_note, tag(reference, 'voice')).text = '1'
+        multiple_rest_nodes[0].text = str(count)
+        if count == 1:
+            style = next((node for node in inserted.iter()
+                          if local(node.tag) == 'measure-style'), None)
+            if style is not None:
+                style.remove(multiple_rest_nodes[0])
+        insert_at = list(part).index(reference) + 1
+        for offset in range(1, count):
+            extra = ET.Element(tag(reference, 'measure'),
+                               {'number': str(inserted_number + offset)})
+            extra.append(rest_note(reference))
+            part.insert(insert_at, extra)
+            insert_at += 1
+    else:
+        insert_at = list(part).index(reference) + (1 if placement == 'after' else 0)
+        for offset in range(count):
+            inserted = ET.Element(tag(reference, 'measure'),
+                                  {'number': str(inserted_number + offset)})
+            if offset == 0 and placement == 'before':
+                for layout_node in [node for node in list(reference)
+                                    if local(node.tag) == 'print']:
+                    reference.remove(layout_node)
+                    inserted.append(layout_node)
+                attrs = child(reference, 'attributes')
+                if attrs is not None:
+                    inserted.append(copy.deepcopy(attrs))
+            if offset == 0 and count > 1:
+                attrs = child(inserted, 'attributes')
+                if attrs is None:
+                    attrs = ET.SubElement(inserted, tag(reference, 'attributes'))
+                style = child(attrs, 'measure-style')
+                if style is None:
+                    style = ET.SubElement(attrs, tag(reference, 'measure-style'))
+                ET.SubElement(style, tag(reference, 'multiple-rest')).text = str(count)
+            inserted.append(rest_note(reference))
+            part.insert(insert_at, inserted)
+            insert_at += 1
+
     for m in later:
-        m.set('number', str(int(m.get('number')) + change['count']))
-    return [{'eventId': change['measureId'], 'before': '原有小节之后',
-             'after': '人工补入 %s 个整小节休止（%s/%s），后续数字小节号顺延；仍需核对原谱' % (change['count'], beats, unit),
-             'type': 'insertRests', 'count': change['count']}]
+        m.set('number', str(int(m.get('number')) + shift))
+    placement_label = '之前' if placement == 'before' else '之后'
+    return [{'eventId': change['measureId'], 'before': '目标小节%s' % placement_label,
+             'after': '人工补入 %s 个整小节休止（%s/%s），后续数字小节号顺延；仍需核对原谱' % (count, beats, unit),
+             'type': 'insertRests', 'count': count,
+             'placement': placement, 'grouped': count > 1,
+             'reusedPlaceholder': reusable_placeholder}]
 
 
 def report_text(job, verification):

@@ -174,7 +174,7 @@ export async function loadScoreEditor(jobId: string) {
   return result.data;
 }
 
-export async function saveScoreEdits(jobId: string, revision: string, changes: Array<{ eventId: string; pitch: EditorPitch } | { type: 'insertRests'; measureId: string; count: number } | { type: 'confirmRest'; gapId: string }>) {
+export async function saveScoreEdits(jobId: string, revision: string, changes: Array<{ eventId: string; pitch: EditorPitch } | { type: 'insertRests'; measureId: string; count: number; placement?: 'before' | 'after' } | { type: 'confirmRest'; gapId: string }>) {
   const result = await apiRequest<{ success: boolean; data: ScoreJobSnapshot }>(`/api/score/transpositions/${encodeURIComponent(jobId)}/edits`, {
     method: 'POST', body: JSON.stringify({ revision, changes }),
   });

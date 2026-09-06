@@ -93,11 +93,56 @@ def test_insert_rest_bars_keeps_notes_breaks_meter_and_shifts_numbers(api):
     measures = root.findall('.//measure')
     assert len(measures) == 9
     assert ET.tostring(measures[0]) == original
-    assert [m.get('number') for m in measures] == list(map(str, range(1, 10)))
+    assert [m.get('number') for m in measures] == [str(i) for i in range(1, 10)]
+    assert measures[1].findtext('attributes/measure-style/multiple-rest') == '7'
     assert all(m.find('note/rest').get('measure') == 'yes' for m in measures[1:8])
     assert all(m.findtext('note/duration') == '12' for m in measures[1:8])
     assert measures[-1].find('print').get('new-page') == 'yes'
-    assert log[0]['count'] == 7
+    assert log[0]['count'] == 7 and log[0]['grouped'] is True
+
+
+def test_insert_grouped_rest_before_reference_moves_break_and_shifts_reference(api):
+    from score_editor import apply_edits
+    root = rest_tree()
+    reference = root.findall('.//measure')[0]
+    reference.insert(0, ET.Element('print', {'new-system': 'yes'}))
+    log = apply_edits(root, [{
+        'type': 'insertRests', 'measureId': 'p1-m1', 'count': 23,
+        'placement': 'before',
+    }])
+    measures = root.findall('.//measure')
+    assert len(measures) == 25
+    assert [m.get('number') for m in measures] == [str(i) for i in range(1, 26)]
+    assert measures[0].findtext('attributes/measure-style/multiple-rest') == '23'
+    assert measures[0].find('print').get('new-system') == 'yes'
+    assert measures[23].find('print') is None
+    assert measures[0].findtext('attributes/time/beats') == '6'
+    assert all(m.findtext('note/duration') == '12' for m in measures[:23])
+    assert log[0]['placement'] == 'before'
+
+
+
+def test_insert_grouped_rest_upgrades_one_bar_omr_placeholder_and_shifts_by_delta(api):
+    from score_editor import apply_edits
+    root = ET.fromstring('''<score-partwise><part id="P1">
+      <measure number="108"><attributes><divisions>4</divisions>
+      <time><beats>4</beats><beat-type>4</beat-type></time>
+      <measure-style><multiple-rest>1</multiple-rest></measure-style></attributes>
+      <note><rest measure="yes"/><duration>16</duration><voice>1</voice></note></measure>
+      <measure number="109"><note><pitch><step>C</step><octave>5</octave></pitch>
+      <duration>4</duration><voice>1</voice><type>quarter</type></note></measure>
+      </part></score-partwise>''')
+    log = apply_edits(root, [{
+        'type': 'insertRests', 'measureId': 'p1-m1', 'count': 23,
+        'placement': 'before',
+    }])
+    measures = root.findall('.//measure')
+    assert len(measures) == 24
+    assert [m.get('number') for m in measures] == [str(i) for i in range(108, 132)]
+    assert measures[0].findtext('attributes/measure-style/multiple-rest') == '23'
+    assert all(m.find('note/rest').get('measure') == 'yes' for m in measures[:23])
+    assert measures[-1].find('note/pitch') is not None
+    assert log[0]['reusedPlaceholder'] is True
 
 
 @pytest.mark.parametrize('count', [0, 65, True, 1.5])
@@ -107,6 +152,18 @@ def test_invalid_rest_count_does_not_mutate_score(api, count):
     before = ET.tostring(root)
     with pytest.raises(ValueError):
         apply_edits(root, [{'type': 'insertRests', 'measureId': 'p1-m1', 'count': count}])
+    assert ET.tostring(root) == before
+
+
+def test_invalid_rest_placement_does_not_mutate_score(api):
+    from score_editor import apply_edits
+    root = rest_tree()
+    before = ET.tostring(root)
+    with pytest.raises(ValueError, match='之前或之后'):
+        apply_edits(root, [{
+            'type': 'insertRests', 'measureId': 'p1-m1', 'count': 23,
+            'placement': 'inside',
+        }])
     assert ET.tostring(root) == before
 
 

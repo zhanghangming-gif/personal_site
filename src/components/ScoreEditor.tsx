@@ -18,13 +18,14 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [restCount, setRestCount] = useState(1);
+  const [restPlacement, setRestPlacement] = useState<'before' | 'after'>('before');
   const [restConfirmed, setRestConfirmed] = useState(false);
   const [activeRestGap, setActiveRestGap] = useState('');
   const [eventRestConfirmed, setEventRestConfirmed] = useState(false);
   useEffect(() => {
     let active = true;
     void loadScoreEditor(jobId).then(data => {
-      if (active) { setScore(data); setMeasureIndex(0); setSelected(''); setEdits({}); setHistory([]); setActiveRestGap(''); setEventRestConfirmed(false); }
+      if (active) { setScore(data); setMeasureIndex(0); setSelected(''); setEdits({}); setHistory([]); setRestPlacement('before'); setRestConfirmed(false); setActiveRestGap(''); setEventRestConfirmed(false); }
     }).catch((e: unknown) => { if (active) setError(e instanceof Error ? e.message : '加载失败'); });
     return () => { active = false; };
   }, [jobId]);
@@ -50,7 +51,7 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
     if (!score || !measure || !restConfirmed || count || saving || disabled) return;
     setSaving(true); setError('');
     try {
-      const job = await saveScoreEdits(jobId, score.revision, [{ type: 'insertRests', measureId: measure.id, count: restCount }]);
+      const job = await saveScoreEdits(jobId, score.revision, [{ type: 'insertRests', measureId: measure.id, count: restCount, placement: restPlacement }]);
       setRestConfirmed(false); onSaved(job.jobId);
     } catch (e) { setError(e instanceof Error ? e.message : '保存失败'); }
     finally { setSaving(false); }
@@ -68,18 +69,21 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
     if (!score) return;
     const index = score.measures.findIndex(item => item.id === measureId);
     if (index < 0) return;
-    setMeasureIndex(index); setSelected(''); setRestConfirmed(false);
+    setMeasureIndex(index); setSelected(''); setRestPlacement('before'); setRestConfirmed(false);
     if (missingMeasures) setRestCount(missingMeasures);
     window.setTimeout(() => document.getElementById('score-rest-repair')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0);
   }
   return <section className="surface rounded-2xl p-5">
-    <h2 className="text-xl font-black">{en ? 'Edit score' : '在线校谱 · 音高与补休止'}</h2>
+    <h2 className="text-xl font-black">{en ? 'Edit score' : '在线校谱 · 音高与空拍小节'}</h2>
     <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-300">
-      {en ? 'Choose a measure and a note. Edit the target pitch, then generate a new PDF. Original versions remain available.' : '选择小节并点击音符，修改目标谱的音高，再生成新版 PDF。原版本保留，可随时返回。'}
+      {en ? 'Edit pitches or insert missing empty bars before or after a selected measure, then generate a new PDF.' : '可以修改音高，也可以选择小节位置，在它之前或之后补入空拍小节，再生成新版 PDF。'}
     </p>
     <p className="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-300">
       {en ? 'The diagram shows pitches only. You can also insert confirmed whole-bar rests in a single-staff part. Other duration, note and notation edits require a MusicXML editor.' : '下方是音高选择示意，完整节奏与演奏标记请看 PDF。支持单声部单谱表补入整小节休止；改时值、增删有音高的音符及连线等，请下载 MusicXML 在制谱软件中完成。'}
     </p>
+    <button type="button" className="button-secondary mt-3" disabled={disabled || saving} onClick={() => document.getElementById('score-rest-repair')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+      {en ? '+ Insert missing empty bars' : '＋ 人工补入空拍小节'}
+    </button>
     {error && <p role="alert" className="mt-3 text-sm text-rose-600 dark:text-rose-300">{error}</p>}
     {!score ? <p className="mt-4">{en ? 'Loading…' : '正在读取可编辑乐谱…'}</p> : <>
       {!!score.restSuggestions?.length && <div className="mt-5 rounded-2xl border border-sky-500/40 bg-sky-500/10 p-4">
@@ -121,7 +125,7 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
             <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-300">{gap.reason}</p>
             {!!choices.length && <div className="mt-3 flex flex-wrap gap-2">
               {choices.map(item => <button key={item.measureId} type="button" className="button-secondary text-sm" disabled={saving || disabled} onClick={() => focusMeasure(item.measureId, gap.missingMeasures)}>
-                {en ? `Inspect near measure ${item.measureNumber || item.positionInSystem}` : `定位到候选小节 ${item.measureNumber || item.positionInSystem}`}{'isRest' in item && item.isRest ? (en ? ' (rest)' : '（休止）') : ''}
+                {en ? `Use measure ${item.measureNumber || item.positionInSystem} as reference` : `以第 ${item.measureNumber || item.positionInSystem} 小节为插入参照`}{'isRest' in item && item.isRest ? (en ? ' (rest)' : '（休止）') : ''}
               </button>)}
             </div>}
           </article>;
@@ -183,12 +187,21 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
         <a className="text-sm underline" href={`/api/score/transpositions/${jobId}/musicxml`}>{en ? 'Export MusicXML' : '下载 MusicXML'}</a>
       </div>
       <div id="score-rest-repair" className="mt-5 rounded-xl border border-amber-500/40 p-4">
-        <h3 className="font-bold">{en ? 'Insert confirmed missing rests' : '补入确认漏识别的休止小节'}</h3>
-        <p className="mt-2 text-sm leading-6">{en ? 'Insert after the selected measure using its active meter. Following numeric measure labels move forward. Page and system layout must be checked again. A reported gap does not prove the missing music is silent.' : '在当前选中小节之后，按当前位置拍号补入整小节休止，后续数字小节号顺延。保存后需要重新核对分页、分行和编号。“缺少小节”的提示不能证明缺失内容是休止。'}</p>
-        <label className="mt-3 block text-sm">{en ? 'Number of bars (1–64)' : '补入数量（1–64 小节）'}<input type="number" min={1} max={64} value={restCount} disabled={saving || disabled} onChange={e => { setRestCount(Number(e.target.value)); setRestConfirmed(false); }} className="ml-3 w-24 rounded-lg border bg-[rgb(var(--surface))] p-2" /></label>
+        <h3 className="font-bold">{en ? 'Manually insert empty bars' : '人工补入空拍小节'}</h3>
+        <p className="mt-2 text-sm leading-6">{en ? 'Choose a reference measure, insert before or after it, and enter the printed count. Counts above one are written as one compact multi-measure rest.' : '先选择一个参照小节，再选择在它之前或之后插入，并填写原谱印刷的数字。数量大于 1 时，会生成一个带数字的多小节休止，例如“23”。'}</p>
+        {measure && <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-sm font-bold">{en ? `Reference: measure ${measure.location.measure}` : `当前参照：第 ${measure.location.measure} 小节`}</p>}
+        <fieldset className="mt-3">
+          <legend className="text-sm font-bold">{en ? 'Insert position' : '插入位置'}</legend>
+          <div className="mt-2 flex flex-wrap gap-3">
+            <label className={`cursor-pointer rounded-xl border px-4 py-3 text-sm ${restPlacement === 'before' ? 'border-blue-500 bg-blue-500/15 font-bold' : ''}`}><input type="radio" className="mr-2" name={`rest-placement-${jobId}`} checked={restPlacement === 'before'} disabled={saving || disabled} onChange={() => { setRestPlacement('before'); setRestConfirmed(false); }} />{en ? 'Before this measure' : '在当前小节之前'}</label>
+            <label className={`cursor-pointer rounded-xl border px-4 py-3 text-sm ${restPlacement === 'after' ? 'border-blue-500 bg-blue-500/15 font-bold' : ''}`}><input type="radio" className="mr-2" name={`rest-placement-${jobId}`} checked={restPlacement === 'after'} disabled={saving || disabled} onChange={() => { setRestPlacement('after'); setRestConfirmed(false); }} />{en ? 'After this measure' : '在当前小节之后'}</label>
+          </div>
+        </fieldset>
+        <label className="mt-3 block text-sm">{en ? 'Printed multi-rest count (1–64)' : '原谱标出的空拍小节总数（1–64）'}<input type="number" min={1} max={64} value={restCount} disabled={saving || disabled} onChange={e => { setRestCount(Number(e.target.value)); setRestConfirmed(false); }} className="ml-3 w-24 rounded-lg border bg-[rgb(var(--surface))] p-2" /></label>
+        {restCount > 1 && restCount <= 64 && <p className="mt-2 text-sm text-blue-600 dark:text-blue-300">{en ? `The PDF will show a compact multi-measure rest labelled ${restCount}.` : `新版 PDF 将显示一个标有“${restCount}”的多小节休止。`}</p>}
         <label className="mt-3 flex items-start gap-2 text-sm"><input type="checkbox" checked={restConfirmed} disabled={saving || disabled} onChange={e => setRestConfirmed(e.target.checked)} />{en ? 'I checked the source: these bars are rests and the insertion position is correct.' : '我已对照原谱，确认缺失的是休止，且选中的插入位置正确。'}</label>
         {!!count && <p className="mt-2 text-sm">{en ? 'Save or discard pitch changes before inserting bars.' : '请先保存或放弃音高修改，再补入小节。'}</p>}
-        <button type="button" className="button-secondary mt-3 disabled:opacity-40" disabled={!restConfirmed || !!count || saving || disabled || !Number.isInteger(restCount) || restCount < 1 || restCount > 64} onClick={() => void addRests()}>{en ? 'Insert rests and generate a new PDF' : '补休止并生成新版 PDF'}</button>
+        <button type="button" className="button-primary mt-3 disabled:opacity-40" disabled={!restConfirmed || !!count || saving || disabled || !Number.isInteger(restCount) || restCount < 1 || restCount > 64} onClick={() => void addRests()}>{saving ? (en ? 'Generating…' : '正在生成…') : en ? 'Repair empty bars and generate PDF' : `按原谱补入标为 ${restCount} 的空拍小节并生成 PDF`}</button>
       </div>
     </>}
   </section>;
