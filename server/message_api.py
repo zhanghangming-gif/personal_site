@@ -1911,6 +1911,50 @@ def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unre
             effective_measure_span(measure)
             for measure in current_xml_system["measures"])
         missing = expected_span - current_span
+
+        # A MULTI_REST object is already a semantic classification, even when
+        # its printed number is absent from the OMR graph and every OCR pass
+        # fails. With two independent line-start anchors and exactly one
+        # unresolved rest-only MULTI_REST stack, the count has one equation:
+        #
+        # count = printed system span - span of all other measures.
+        #
+        # This recovers any 2..64 count without memorising a score or trusting
+        # OCR alone. Multiple unknown multirests remain unresolved.
+        structural_counts = []
+        if missing > 0 and independent_line_anchors:
+            for position, stack in enumerate(stacks):
+                if (stack.get("special") != "MULTI_REST"
+                        or position >= len(current_xml_system["measures"])):
+                    continue
+                measure = current_xml_system["measures"][position]
+                existing_span = effective_measure_span(measure)
+                inferred = expected_span - (current_span - existing_span)
+                if (measure_is_rest_only(measure) and existing_span == 1
+                        and 2 <= inferred <= 64 and inferred > existing_span):
+                    structural_counts.append((position, measure, inferred))
+        if len(structural_counts) == 1:
+            position, measure, inferred = structural_counts[0]
+            measure_index = first_part_measures(root).index(measure)
+            if not set_multirest_at_index(root, measure_index, inferred):
+                return {"changed": False, "safePartialOutput": False}
+            selected_repairs.append({
+                "page": omr_system.get("page"), "system": omr_system.get("system"),
+                "stackIndex": position,
+                "measure": measure.attrib.get("number", ""),
+                "multipleRest": inferred,
+                "rawValue": None, "ocrValue": None,
+                "reason": "唯一 MULTI_REST 位置与前后行首小节号形成唯一结构解",
+                "evidence": "audiveris-multirest+independent-line-start-span+unique-structural-equation",
+                "confidence": "high",
+            })
+            repaired_system_indexes.add(system_index)
+            current_xml_system = musicxml_systems(root)[system_index]
+            current_span = sum(
+                effective_measure_span(item)
+                for item in current_xml_system["measures"])
+            missing = expected_span - current_span
+
         merged_indexes = likely_merged_multirest_indexes(omr_system)
         printed_counts = [
             value for value in (omr_system.get("interiorNumbers") or [])

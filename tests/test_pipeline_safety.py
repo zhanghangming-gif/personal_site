@@ -242,6 +242,63 @@ def test_partial_multirest_never_commits_ocr_only_count(api, tmp_path):
     assert not (tmp_path / 'output.musicxml').exists()
 
 
+
+def test_unique_semantic_multirest_count_is_derived_from_line_span_without_ocr(api, tmp_path):
+    measures = [make_measure(1)]
+    measures.extend(make_measure(index, rest=False, pitch=True) for index in range(2, 10))
+    last = make_measure(10, rest=False, pitch=True)
+    last.insert(0, ET.Element('print', {'new-system': 'yes'}))
+    measures.append(last)
+    source = tmp_path / 'source.musicxml'
+    output = tmp_path / 'output.musicxml'
+    ET.ElementTree(make_score([measures])).write(source)
+    analysis = {'systems': [
+        {'page': 2, 'system': 1, 'lineStart': 1, 'lineStartRaw': 1,
+         'stacks': [
+             {'special': 'MULTI_REST', 'duration': '0', 'multirestBar': True},
+             *[{'special': '', 'duration': '1'} for _ in range(8)],
+         ], 'restCounts': []},
+        {'page': 2, 'system': 2, 'lineStart': 32, 'lineStartRaw': 32,
+         'stacks': [{'special': '', 'duration': '1'}], 'restCounts': []},
+    ]}
+    report = api.apply_verified_multirest_repairs(str(source), str(output), analysis)
+    assert report['safePartialOutput'] is True, report
+    repair = report['partialRepairs'][0]
+    assert repair['multipleRest'] == 23
+    assert repair['rawValue'] is None and repair['ocrValue'] is None
+    assert repair['evidence'] == (
+        'audiveris-multirest+independent-line-start-span+unique-structural-equation')
+    signature = api.score_signature(str(output))
+    assert signature['measureCount'] == 32
+    assert signature['lineStartNumbers'] == ['1', '32']
+
+
+def test_two_unknown_semantic_multirests_are_not_guessed_from_one_span(api, tmp_path):
+    measures = [
+        make_measure(1), make_measure(2),
+        make_measure(3, rest=False, pitch=True),
+    ]
+    last = make_measure(4, rest=False, pitch=True)
+    last.insert(0, ET.Element('print', {'new-system': 'yes'}))
+    measures.append(last)
+    source = tmp_path / 'source.musicxml'
+    output = tmp_path / 'output.musicxml'
+    ET.ElementTree(make_score([measures])).write(source)
+    analysis = {'systems': [
+        {'page': 1, 'system': 1, 'lineStart': 1, 'lineStartRaw': 1,
+         'stacks': [
+             {'special': 'MULTI_REST', 'duration': '0'},
+             {'special': 'MULTI_REST', 'duration': '0'},
+             {'special': '', 'duration': '1'},
+         ], 'restCounts': []},
+        {'page': 1, 'system': 2, 'lineStart': 8, 'lineStartRaw': 8,
+         'stacks': [{'special': '', 'duration': '1'}], 'restCounts': []},
+    ]}
+    report = api.apply_verified_multirest_repairs(str(source), str(output), analysis)
+    assert report['safePartialOutput'] is False
+    assert not output.exists()
+
+
 def test_integer_ocr_consensus_uses_unique_majority(api):
     assert api.integer_ocr_consensus([3, 3, None, 4]) == (3, True)
     assert api.integer_ocr_consensus([3, 4]) == (None, False)
