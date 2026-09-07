@@ -74,6 +74,11 @@ def build_transposition_intent(request):
             'preserveMeasureNumbers': True,
             'preserveNonPitchMarks': True,
         },
+        'pageSelection': {
+            'mode': request.get('pageSelectionMode', 'all'),
+            'sourcePageCount': request.get('sourcePageCount'),
+            'selectedPages': list(request.get('selectedPages') or []),
+        },
     }
     value['intentId'] = value_id('intent', value)
     return value

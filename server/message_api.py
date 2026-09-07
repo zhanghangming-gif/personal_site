@@ -39,6 +39,7 @@ from score_jobs import ScoreJobs, QueueFull
 from score_skill_bridge import try_skill_transposition
 from score_agent_bridge import process_agent_score
 from score_preflight_bridge import preflight_pdf
+from score_page_selection_bridge import prepare_selected_pdf, validate_requested_pages
 from score_inspection_bridge import (
     inspect_score_pdf, inspect_rendered_score_pdf, render_score_region,
     prepare_omr_variant,
@@ -4578,6 +4579,8 @@ def process_score_job(job_id, request, progress):
                 "sourceInstrument": request["sourceInstrument"], "targetInstrument": request["targetInstrument"],
                 "semitones": request["semitones"],
                 "sourcePages": summary.get("sourcePages", 0), "outputPages": summary.get("outputPages", 0),
+                "sourceDocumentPages": request.get("sourcePageCount", summary.get("sourcePages", 0)),
+                "selectedPages": request.get("selectedPages", []),
                 "noteEvents": summary.get("noteEvents", 0), "measures": summary.get("measures", 0),
                 "outputSize": os.path.getsize(output_pdf), "engine": verification.get("engine", "omr"),
             },
@@ -5447,6 +5450,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("PDF 不能为空，且不能超过 25MB")
         if not binary.startswith(b"%PDF"):
             raise ValueError("只支持标准 PDF 文件")
+        page_selection_mode = str(data.get("pageSelectionMode", "all"))
+        if page_selection_mode not in ("all", "custom"):
+            raise ValueError("转换页码模式无效")
+        selected_pages = (validate_requested_pages(data.get("selectedPages"))
+                          if page_selection_mode == "custom" else None)
         actor = self.client_hash()
         with connect() as db:
             if not rate_allowed(db, "score_transpose", actor, limit=2, window=300):
@@ -5454,19 +5462,40 @@ class Handler(BaseHTTPRequestHandler):
         job_id = str(uuid.uuid4())
         job_dir = os.path.join(SCORE_DIR, job_id)
         os.makedirs(job_dir, exist_ok=True)
-        with open(os.path.join(job_dir, "input.pdf"), "wb") as stream:
+        uploaded_pdf = os.path.join(job_dir, "source-upload.pdf")
+        input_pdf = os.path.join(job_dir, "input.pdf")
+        with open(uploaded_pdf, "wb") as stream:
             stream.write(binary)
+        try:
+            page_selection = prepare_selected_pdf(
+                uploaded_pdf, input_pdf, selected_pages,
+                os.path.join(job_dir, "page-selection.json"))
+        except ValueError:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
+        try:
+            os.remove(uploaded_pdf)
+        except OSError:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise ValueError("服务器暂时无法准备所选 PDF 页面")
         request = {"name": name, "sourceInstrument": source, "targetInstrument": target,
                    "semitones": semitones, "accidentalPreference": accidental,
-                   "transposeMode": mode}
+                   "transposeMode": mode,
+                   "pageSelectionMode": page_selection["mode"],
+                   "selectedPages": page_selection["selectedPages"],
+                   "sourcePageCount": page_selection["sourcePageCount"]}
         request["intent"] = build_transposition_intent(request)
-        ScoreWorkspace(job_dir).initialize(
-            job_id, os.path.join(job_dir, "input.pdf"), request, request["intent"])
+        workspace = ScoreWorkspace(job_dir)
+        workspace.initialize(job_id, input_pdf, request, request["intent"])
+        workspace.register_artifact(
+            "page-selection", os.path.join(job_dir, "page-selection.json"),
+            metadata={"selectedPages": page_selection["selectedPages"]})
         with open(os.path.join(job_dir, "request.json"), "w", encoding="utf8") as stream:
             json.dump(request, stream, ensure_ascii=False)
         try:
             initial = SCORE_JOBS.submit(job_id, request)
         except QueueFull as exc:
+            shutil.rmtree(job_dir, ignore_errors=True)
             return self.json_response(429, {"success": False, "message": str(exc)})
         # Cached older frontends expect a completed response. They still use the bounded worker.
         if data.get("async") is not True:

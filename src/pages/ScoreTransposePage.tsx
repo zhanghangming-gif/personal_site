@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Download,
   FileMusic,
+  Files,
   FileText,
   Gauge,
   Loader2,
@@ -22,6 +23,7 @@ import { useToast } from '../components/Toast';
 import { useLanguage } from '../context/LanguageContext';
 import { useSound } from '../hooks/useSound';
 import { transposeScore, waitForScore, type ScoreTransposeResult } from '../services/scoreTransposeService';
+import { formatPageSelection, MAX_SCORE_SELECTED_PAGES, MAX_SCORE_SOURCE_PAGES, parsePageSelection, readPdfPageCount } from '../utils/pdfPages';
 
 type Instrument = {
   id: string;
@@ -32,6 +34,7 @@ type Instrument = {
 
 type TaskState = 'idle' | 'processing' | 'needs_review' | 'completed' | 'failed';
 type TransposeMode = 'instrument' | 'custom';
+type PageSelectionMode = 'all' | 'custom';
 
 const instruments: Instrument[] = [
   { id: 'concert_c', zh: 'C 调乐器 / 原调', en: 'Concert C', offset: 0 },
@@ -117,6 +120,11 @@ export default function ScoreTransposePage() {
   const en = language === 'en';
   const [file, setFile] = useState<File | null>(null);
   const [fileUrl, setFileUrl] = useState('');
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
+  const [pageCountLoading, setPageCountLoading] = useState(false);
+  const [pageCountError, setPageCountError] = useState('');
+  const [pageSelectionMode, setPageSelectionMode] = useState<PageSelectionMode>('all');
+  const [pageRange, setPageRange] = useState('');
   const [source, setSource] = useState('clarinet_a');
   const [target, setTarget] = useState('clarinet_bb');
   const [transposeMode, setTransposeMode] = useState<TransposeMode>('instrument');
@@ -128,13 +136,14 @@ export default function ScoreTransposePage() {
   const [errorMessage, setErrorMessage] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<AbortController | null>(null);
+  const pageReadIdRef = useRef(0);
   const [activeJob, setActiveJob] = useState<string | null>(() => window.sessionStorage.getItem(ACTIVE_JOB_KEY));
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [previousVersions, setPreviousVersions] = useState<ScoreTransposeResult[]>([]);
   const availablePdf = result?.outputAllowed ? result.outputUrl : result?.candidateUrl;
-  const originalPdf = fileUrl || result?.originalUrl;
+  const originalPdf = result?.originalUrl || fileUrl;
 
   const sourceInstrument = instruments.find((item) => item.id === source) ?? instruments[0];
   const targetInstrument = instruments.find((item) => item.id === target) ?? instruments[1];
@@ -146,6 +155,15 @@ export default function ScoreTransposePage() {
   const displayedTitle = displayedMode === 'custom'
     ? (en ? 'Custom shift' : '自定义转调')
     : `${en ? displayedSource.en : displayedSource.zh} → ${en ? displayedTarget.en : displayedTarget.zh}`;
+  const parsedPageSelection = useMemo(
+    () => pageSelectionMode === 'custom' && pdfPageCount ? parsePageSelection(pageRange, pdfPageCount, en) : { pages: [], error: '' },
+    [en, pageRange, pageSelectionMode, pdfPageCount],
+  );
+  const selectedPageCount = pageSelectionMode === 'all' ? (pdfPageCount ?? 0) : parsedPageSelection.pages.length;
+  const pageSelectionInvalid = Boolean(
+    file && (pageCountLoading || pageCountError || !pdfPageCount ||
+      (pageSelectionMode === 'all' ? pdfPageCount > MAX_SCORE_SELECTED_PAGES : parsedPageSelection.error)),
+  );
 
   useEffect(() => {
     if (!file) {
@@ -187,9 +205,10 @@ export default function ScoreTransposePage() {
   }, [activeJob]);
 
   const fileMessage = useMemo(() => {
-    if (!file) return en ? 'PDF scores, 1–20 pages, up to 25 MB.' : 'PDF 乐谱，1–20 页，单文件 25 MB 以内。';
-    return `${file.name} · ${formatSize(file.size)}`;
-  }, [en, file]);
+    if (!file) return en ? 'PDF scores, up to 500 pages and 25 MB; select up to 20 pages per task.' : 'PDF 乐谱最多 500 页、25 MB；每次可选择转换其中最多 20 页。';
+    const pages = pdfPageCount ? ` · ${pdfPageCount} ${en ? 'pages' : '页'}` : '';
+    return `${file.name} · ${formatSize(file.size)}${pages}`;
+  }, [en, file, pdfPageCount]);
 
   const acceptFile = (nextFile?: File) => {
     if (!nextFile || taskState === 'processing') return;
@@ -204,6 +223,28 @@ export default function ScoreTransposePage() {
       return;
     }
     setFile(nextFile);
+    setPdfPageCount(null);
+    setPageCountError('');
+    setPageSelectionMode('all');
+    setPageRange('');
+    setPageCountLoading(true);
+    const readId = ++pageReadIdRef.current;
+    void readPdfPageCount(nextFile).then((count) => {
+      if (readId !== pageReadIdRef.current) return;
+      if (count < 1 || count > MAX_SCORE_SOURCE_PAGES) {
+        throw new Error(en ? `PDFs must contain 1–${MAX_SCORE_SOURCE_PAGES} pages.` : `PDF 页数必须在 1–${MAX_SCORE_SOURCE_PAGES} 页之间。`);
+      }
+      setPdfPageCount(count);
+      if (count > MAX_SCORE_SELECTED_PAGES) {
+        setPageSelectionMode('custom');
+        setPageRange(`1-${MAX_SCORE_SELECTED_PAGES}`);
+      }
+    }).catch((error: unknown) => {
+      if (readId !== pageReadIdRef.current) return;
+      setPageCountError(error instanceof Error ? error.message : (en ? 'Unable to read this PDF.' : '无法读取这份 PDF。'));
+    }).finally(() => {
+      if (readId === pageReadIdRef.current) setPageCountLoading(false);
+    });
     setTaskState('idle');
     setStageIndex(0);
     setResult(null);
@@ -231,6 +272,12 @@ export default function ScoreTransposePage() {
       play('error');
       return;
     }
+    if (pageSelectionInvalid || !pdfPageCount) {
+      const message = pageCountError || parsedPageSelection.error || (en ? 'Wait until the PDF page count is ready.' : '请先完成 PDF 页数读取并正确选择页码。');
+      toast(message, 'error');
+      play('error');
+      return;
+    }
     setTaskState('processing');
     setStageIndex(0);
     setProgress(1);
@@ -248,6 +295,8 @@ export default function ScoreTransposePage() {
         targetInstrument: target,
         semitones: transposeMode === 'custom' ? customSemitones : undefined,
         accidentalPreference: accidental,
+        pageSelectionMode,
+        selectedPages: pageSelectionMode === 'custom' ? parsedPageSelection.pages : undefined,
       }, controller.signal);
       if (controller.signal.aborted) return;
       if (nextResult.status === 'queued' || nextResult.status === 'processing') {
@@ -282,7 +331,13 @@ export default function ScoreTransposePage() {
   };
 
   const clearFile = () => {
+    pageReadIdRef.current += 1;
     setFile(null);
+    setPdfPageCount(null);
+    setPageCountLoading(false);
+    setPageCountError('');
+    setPageSelectionMode('all');
+    setPageRange('');
     resetTask();
   };
 
@@ -438,6 +493,66 @@ export default function ScoreTransposePage() {
             <p className="mt-5 rounded-xl bg-[rgb(var(--page))] p-3 text-xs leading-6 text-slate-500">
               {en ? 'Instrument mode preserves concert pitch. A clarinet → B♭ clarinet lowers written notes by one semitone.' : '按乐器转调保持实际音高不变。A 调单簧管 → 降 B 调单簧管，记谱降低半音。'}
             </p>
+            <div className="mt-5 border-t border-[rgb(var(--line))] pt-5">
+              <div className="mb-3 flex items-center gap-2">
+                <Files size={17} className="text-accent" />
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                  {en ? 'Pages to transpose' : '转换页码'}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-[rgb(var(--page))] p-1">
+                <button
+                  type="button"
+                  disabled={!file || pageCountLoading || taskState === 'processing' || Boolean(pdfPageCount && pdfPageCount > MAX_SCORE_SELECTED_PAGES)}
+                  onClick={() => { setPageSelectionMode('all'); play('click'); }}
+                  className={`min-h-10 rounded-lg px-2 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${pageSelectionMode === 'all' ? 'bg-[rgb(var(--surface))] text-accent shadow-soft' : 'text-slate-500'}`}
+                >
+                  {en ? 'All pages' : '全部页码'}
+                </button>
+                <button
+                  type="button"
+                  disabled={!file || pageCountLoading || taskState === 'processing'}
+                  onClick={() => {
+                    setPageSelectionMode('custom');
+                    if (!pageRange && pdfPageCount) setPageRange(`1-${Math.min(pdfPageCount, MAX_SCORE_SELECTED_PAGES)}`);
+                    play('click');
+                  }}
+                  className={`min-h-10 rounded-lg px-2 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${pageSelectionMode === 'custom' ? 'bg-[rgb(var(--surface))] text-accent shadow-soft' : 'text-slate-500'}`}
+                >
+                  {en ? 'Selected pages' : '指定页码'}
+                </button>
+              </div>
+              {pageSelectionMode === 'custom' && (
+                <label className="mt-3 block">
+                  <input
+                    type="text"
+                    inputMode="text"
+                    disabled={!file || pageCountLoading || taskState === 'processing'}
+                    value={pageRange}
+                    onChange={(event) => setPageRange(event.target.value)}
+                    placeholder="1-3, 5, 8"
+                    aria-invalid={Boolean(parsedPageSelection.error)}
+                    className={`h-11 w-full rounded-xl border bg-[rgb(var(--surface))] px-3 text-sm font-semibold outline-none transition ${parsedPageSelection.error ? 'border-rose-500 focus:border-rose-500' : 'border-[rgb(var(--line))] focus:border-blue-500'}`}
+                  />
+                  <span className="mt-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    {en ? 'Use commas and ranges, for example 1-3,5,8. Up to 20 pages.' : '用逗号和范围填写，例如 1-3,5,8；每次最多 20 页。'}
+                  </span>
+                </label>
+              )}
+              {pageCountLoading ? (
+                <p className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500"><Loader2 size={14} className="animate-spin" />{en ? 'Reading PDF page count…' : '正在读取 PDF 页数…'}</p>
+              ) : pageCountError ? (
+                <p className="mt-3 text-xs font-bold leading-5 text-rose-600 dark:text-rose-300">{pageCountError}</p>
+              ) : parsedPageSelection.error ? (
+                <p className="mt-3 text-xs font-bold leading-5 text-rose-600 dark:text-rose-300">{parsedPageSelection.error}</p>
+              ) : pdfPageCount ? (
+                <p className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-xs font-bold leading-5 text-blue-700 dark:bg-blue-400/10 dark:text-blue-300">
+                  {pageSelectionMode === 'all'
+                    ? (en ? `All ${pdfPageCount} pages will be transposed and exported.` : `将转换并导出全部 ${pdfPageCount} 页。`)
+                    : (en ? `Pages ${formatPageSelection(parsedPageSelection.pages)} · ${selectedPageCount} selected.` : `将转换并导出第 ${formatPageSelection(parsedPageSelection.pages)} 页，共 ${selectedPageCount} 页。`)}
+                </p>
+              ) : null}
+            </div>
             <div className="mt-5">
               <SelectField disabled={taskState === 'processing'} label={en ? 'Accidentals' : '升降号偏好'} value={accidental} onChange={setAccidental}>
                 <option value="auto">{en ? 'Auto' : '自动'}</option>
@@ -469,7 +584,7 @@ export default function ScoreTransposePage() {
               })}
             </div>
             <div className="mt-5 grid gap-2">
-              <button type="button" onClick={() => void startTask()} disabled={!file || taskState === 'processing'} className="button-primary w-full disabled:cursor-not-allowed disabled:opacity-45">
+              <button type="button" onClick={() => void startTask()} disabled={!file || taskState === 'processing' || pageSelectionInvalid} className="button-primary w-full disabled:cursor-not-allowed disabled:opacity-45">
                 {taskState === 'processing' ? <Loader2 className="animate-spin" size={17} /> : <Music2 size={17} />}
                 {taskState === 'processing' ? (en ? 'Processing...' : '正在转调...') : en ? 'Start transposition' : '开始转调'}
               </button>
@@ -520,7 +635,9 @@ export default function ScoreTransposePage() {
                   [en ? 'Source' : '原谱类型', documentTypeLabel(result.verification?.inspection?.scoreProfile?.documentType, en)],
                   [en ? 'Notes' : '音符事件', result.summary ? String(result.summary.noteEvents) : '-'],
                   [en ? 'Measures' : '小节数', result.summary ? String(result.summary.measures) : '-'],
-                  [en ? 'Pages' : '页数', result.summary ? `${result.summary.sourcePages || '-'} → ${result.summary.outputPages || '-'}` : '-'],
+                  [en ? 'Pages' : '页码', result.summary ? (result.summary.selectedPages?.length
+                    ? `${formatPageSelection(result.summary.selectedPages)} · ${result.summary.sourcePages || '-'} → ${result.summary.outputPages || '-'}`
+                    : `${result.summary.sourcePages || '-'} → ${result.summary.outputPages || '-'}`) : '-'],
                   [en ? 'Size' : '结果大小', result.summary ? formatSize(result.summary.outputSize) : '-'],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between rounded-xl bg-[rgb(var(--page))] px-3 py-3 text-sm lg:block">

@@ -123,6 +123,11 @@ def test_legacy_layout_options_cannot_select_another_pipeline(api, monkeypatch, 
     monkeypatch.setattr(api, "SCORE_JOBS", SimpleNamespace(submit=submit))
     monkeypatch.setattr(api, "connect", lambda: nullcontext(None))
     monkeypatch.setattr(api, "rate_allowed", lambda *args, **kwargs: True)
+    def select_pages(source, output, selected_pages, report_path):
+        Path(output).write_bytes(Path(source).read_bytes())
+        Path(report_path).write_text('{"sourcePageCount":1,"selectedPages":[1],"mode":"all"}', encoding="utf8")
+        return {"sourcePageCount": 1, "selectedPages": [1], "mode": "all"}
+    monkeypatch.setattr(api, "prepare_selected_pdf", select_pages)
     class Request:
         def body(self, limit):
             return {"async": True, "name": "legacy.pdf",
@@ -137,3 +142,44 @@ def test_legacy_layout_options_cannot_select_another_pipeline(api, monkeypatch, 
     assert status == 202
     assert "layoutMode" not in captured and "preservePageCount" not in captured
     assert captured["semitones"] == -1
+
+
+def test_custom_pages_reach_the_pipeline_as_a_selected_pdf(api, monkeypatch, tmp_path):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    captured = {}
+
+    def select_pages(source, output, selected_pages, report_path):
+        assert selected_pages == [2, 4]
+        Path(output).write_bytes(b"%PDF-selected")
+        Path(report_path).write_text('{"sourcePageCount":6,"selectedPages":[2,4],"mode":"custom"}', encoding="utf8")
+        return {"sourcePageCount": 6, "selectedPages": [2, 4], "mode": "custom"}
+
+    def submit(job_id, request):
+        captured.update(request)
+        return {"jobId": job_id, "status": "queued"}
+
+    monkeypatch.setattr(api, "SCORE_DIR", str(tmp_path))
+    monkeypatch.setattr(api, "SCORE_JOBS", SimpleNamespace(submit=submit))
+    monkeypatch.setattr(api, "connect", lambda: nullcontext(None))
+    monkeypatch.setattr(api, "rate_allowed", lambda *args, **kwargs: True)
+    monkeypatch.setattr(api, "prepare_selected_pdf", select_pages)
+
+    class Request:
+        def body(self, limit):
+            return {"async": True, "name": "selected.pdf",
+                    "data": base64.b64encode(b"%PDF-1.4\n%%EOF").decode(),
+                    "sourceInstrument": "clarinet_a", "targetInstrument": "clarinet_bb",
+                    "pageSelectionMode": "custom", "selectedPages": [4, 2]}
+        def client_hash(self):
+            return "test-client"
+        def json_response(self, status, payload):
+            return status, payload
+
+    status, _ = api.Handler.create_score_transposition(Request())
+    assert status == 202
+    assert captured["selectedPages"] == [2, 4]
+    assert captured["sourcePageCount"] == 6
+    assert captured["pageSelectionMode"] == "custom"
+    job_dir = next(path for path in tmp_path.iterdir() if path.is_dir())
+    assert (job_dir / "input.pdf").read_bytes() == b"%PDF-selected"

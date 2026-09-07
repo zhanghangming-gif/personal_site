@@ -9,6 +9,8 @@ export type ScoreTransposeSummary = {
   targetInstrument: string;
   semitones: number;
   sourcePages: number;
+  sourceDocumentPages?: number;
+  selectedPages?: number[];
   outputPages: number;
   noteEvents: number;
   measures: number;
@@ -192,6 +194,8 @@ export type ScoreTransposeRequest = {
   targetInstrument: string;
   semitones?: number;
   accidentalPreference: string;
+  pageSelectionMode: 'all' | 'custom';
+  selectedPages?: number[];
 };
 
 async function fileToBase64(file: File) {
@@ -219,6 +223,8 @@ export async function transposeScore(request: ScoreTransposeRequest, signal?: Ab
       targetInstrument: request.targetInstrument,
       semitones: request.semitones,
       accidentalPreference: request.accidentalPreference,
+      pageSelectionMode: request.pageSelectionMode,
+      selectedPages: request.selectedPages,
     }),
   });
   return result.data;
