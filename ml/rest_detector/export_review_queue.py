@@ -205,28 +205,47 @@ def structure_system_records(job_dir, document, document_hash, image_dir, dpi,
         page_number = page_data.get("page")
         if not isinstance(page_number, int) or not 1 <= page_number <= len(document):
             continue
+        systems = []
         for system in page_data.get("systems") or []:
-            if not isinstance(system, dict) or not isinstance(system.get("bbox"), list):
+            raw_bbox = system.get("bbox") if isinstance(system, dict) else None
+            if not isinstance(raw_bbox, list) or len(raw_bbox) < 4:
                 continue
+            try:
+                [float(value) for value in raw_bbox[:4]]
+            except (TypeError, ValueError):
+                continue
+            systems.append(system)
+        systems.sort(key=lambda system: (
+            float(system["bbox"][1]), float(system["bbox"][0])))
+        for index, system in enumerate(systems):
+            previous_bottom = (float(systems[index - 1]["bbox"][3])
+                               if index else None)
+            next_top = (float(systems[index + 1]["bbox"][1])
+                        if index + 1 < len(systems) else None)
             key = hashlib.sha256(("%s|%s|%s" % (
                 document_hash, page_number, system.get("candidateIndex"))).encode("utf-8")).hexdigest()
-            candidates.append((key, page_number, system))
+            candidates.append((key, page_number, system, previous_bottom, next_top))
     candidates.sort(key=lambda item: item[0])
     selected = sorted(candidates[:maximum_systems], key=lambda item: (
         item[1], item[2].get("candidateIndex") or 0))
     records = []
     structure_dpi = min(int(dpi), 400)
     scale = structure_dpi / 72.0
-    for _key, page_number, system in selected:
+    for _key, page_number, system, previous_bottom, next_top in selected:
         page = document[page_number - 1]
         bbox = clipped_box(system.get("bbox"), page.rect.width, page.rect.height)
         if bbox is None:
             continue
         spacing = max(1.0, float(system.get("staffSpacing") or 4.0))
-        crop = clipped_box([
+        crop_values = [
             bbox[0] - spacing * 2, bbox[1] - spacing * 5,
             bbox[2] + spacing * 2, bbox[3] + spacing * 3,
-        ], page.rect.width, page.rect.height)
+        ]
+        if previous_bottom is not None:
+            crop_values[1] = max(crop_values[1], (previous_bottom + bbox[1]) / 2.0)
+        if next_top is not None:
+            crop_values[3] = min(crop_values[3], (bbox[3] + next_top) / 2.0)
+        crop = clipped_box(crop_values, page.rect.width, page.rect.height)
         if crop is None:
             continue
         system_index = int(system.get("candidateIndex") or 0)
@@ -452,7 +471,7 @@ def main():
     states = {state: sum(item["state"] == state for item in records)
               for state in sorted(VALID_STATES)}
     manifest = {
-        "schemaVersion": 1, "dpi": args.dpi, "sampleCount": len(records),
+        "schemaVersion": 2, "dpi": args.dpi, "sampleCount": len(records),
         "documentCount": len({item["documentSha256"] for item in records}),
         "stateCounts": states,
         "prelabelCount": sum(item["prelabel"] is not None for item in records),
