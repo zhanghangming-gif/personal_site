@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image, ImageEnhance, ImageFilter
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 from torchvision.models.detection import (
     FasterRCNN_MobileNet_V3_Large_FPN_Weights,
     fasterrcnn_mobilenet_v3_large_fpn,
@@ -73,6 +73,41 @@ class CocoRestDataset(Dataset):
 
 def collate(batch):
     return tuple(zip(*batch))
+
+
+class PositiveAwareBatchSampler(Sampler):
+    """Shuffle every epoch while avoiding batches made only from negative crops."""
+
+    def __init__(self, dataset, batch_size, seed):
+        self.dataset = dataset
+        self.batch_size = max(1, int(batch_size))
+        self.seed = int(seed)
+        self.epoch = 0
+
+    def __len__(self):
+        return math.ceil(len(self.dataset) / self.batch_size)
+
+    def _is_positive(self, index):
+        image_id = int(self.dataset.images[index]["id"])
+        return bool(self.dataset.annotations[image_id])
+
+    def __iter__(self):
+        indices = list(range(len(self.dataset)))
+        random.Random(self.seed + self.epoch).shuffle(indices)
+        self.epoch += 1
+        batches = [indices[start:start + self.batch_size]
+                   for start in range(0, len(indices), self.batch_size)]
+        for batch in batches:
+            if any(self._is_positive(index) for index in batch):
+                continue
+            donor = next((candidate for candidate in batches
+                          if sum(self._is_positive(index) for index in candidate) >= 2), None)
+            if donor is None:
+                continue
+            donor_position = next(index for index, value in enumerate(donor)
+                                  if self._is_positive(value))
+            donor[donor_position], batch[0] = batch[0], donor[donor_position]
+        yield from batches
 
 
 def box_iou(one, two):
@@ -181,6 +216,10 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=20260906)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--patience", type=int, default=8)
+    parser.add_argument("--max-non-finite-batches", type=int, default=3,
+                        help="Abort an epoch after this many non-finite batches")
+    parser.add_argument("--resume", type=Path,
+                        help="Initialize model weights from a compatible training checkpoint")
     parser.add_argument("--amp", action="store_true",
                         help="Enable mixed precision; leave off if detection losses become unstable")
     return parser.parse_args()
@@ -200,8 +239,10 @@ def main():
     if not train_data or not validation_data or not test_data:
         raise SystemExit("train/validation/test must each contain at least one image")
     loaders = {
-        "train": DataLoader(train_data, batch_size=args.batch_size, shuffle=True,
-                            num_workers=args.workers, collate_fn=collate, pin_memory=device.type == "cuda"),
+        "train": DataLoader(
+            train_data,
+            batch_sampler=PositiveAwareBatchSampler(train_data, args.batch_size, args.seed),
+            num_workers=args.workers, collate_fn=collate, pin_memory=device.type == "cuda"),
         "validation": DataLoader(validation_data, batch_size=1, shuffle=False,
                                  num_workers=args.workers, collate_fn=collate),
         "test": DataLoader(test_data, batch_size=1, shuffle=False,
@@ -209,6 +250,15 @@ def main():
     }
     category_names = train_data.categories
     model = create_model(max(category_names) + 1, args.min_size, args.max_size).to(device)
+    initialized_from = None
+    if args.resume:
+        checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+        checkpoint_categories = {int(key): value
+                                 for key, value in checkpoint.get("categories", {}).items()}
+        if checkpoint_categories != category_names:
+            raise SystemExit("resume checkpoint categories do not match the training dataset")
+        model.load_state_dict(checkpoint["model"])
+        initialized_from = str(args.resume.resolve())
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate,
                                   weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, args.epochs))
@@ -216,6 +266,7 @@ def main():
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     args.output.mkdir(parents=True, exist_ok=True)
     history, best_map, stale = [], -1.0, 0
+    non_finite_batches = []
     started = time.time()
     stop_reason = "epochs_completed"
     print(json.dumps({"device": str(device), "train": len(train_data),
@@ -223,7 +274,8 @@ def main():
     for epoch in range(1, args.epochs + 1):
         model.train()
         losses = []
-        for images, targets in loaders["train"]:
+        epoch_non_finite = 0
+        for batch_index, (images, targets) in enumerate(loaders["train"], start=1):
             images = [image.to(device, non_blocking=True) for image in images]
             targets = [{key: value.to(device) for key, value in target.items()}
                        for target in targets]
@@ -232,16 +284,26 @@ def main():
                 loss_map = model(images, targets)
                 loss = sum(loss_map.values())
             if not math.isfinite(float(loss.detach())):
-                stop_reason = "non_finite_loss_epoch_%d" % epoch
-                print(json.dumps({"warning": stop_reason}), flush=True)
-                break
+                epoch_non_finite += 1
+                incident = {
+                    "epoch": epoch,
+                    "batch": batch_index,
+                    "imageIds": [int(target["image_id"].item()) for target in targets],
+                }
+                non_finite_batches.append(incident)
+                optimizer.zero_grad(set_to_none=True)
+                print(json.dumps({"warning": "non_finite_batch", **incident}), flush=True)
+                if epoch_non_finite >= args.max_non_finite_batches:
+                    stop_reason = "too_many_non_finite_batches_epoch_%d" % epoch
+                    break
+                continue
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
             scaler.step(optimizer)
             scaler.update()
             losses.append(float(loss.detach()))
-        if not losses or stop_reason.startswith("non_finite"):
+        if not losses or stop_reason.startswith("too_many_non_finite"):
             break
         scheduler.step()
         metrics = evaluate(model, loaders["validation"], device, category_names)
@@ -269,6 +331,8 @@ def main():
         "architecture": checkpoint["architecture"], "device": str(device),
         "bestEpoch": checkpoint["epoch"], "elapsedSeconds": round(time.time() - started, 2),
         "stopReason": stop_reason, "mixedPrecision": use_amp,
+        "initializedFrom": initialized_from,
+        "nonFiniteBatches": non_finite_batches,
         "dataset": {"train": len(train_data), "validation": len(validation_data),
                     "test": len(test_data)},
         "validation": evaluate(model, loaders["validation"], device, category_names),
