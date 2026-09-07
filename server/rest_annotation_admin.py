@@ -419,6 +419,7 @@ def build_training_archive(dataset_dir):
                         "image_sha256": item.get("trainingImageSha256"),
                         "review_state": item.get("state"),
                         "reviewed_at": item.get("reviewedAt"),
+                        "task_type": item.get("taskType") or "rest",
                     })
                     targets = (item.get("annotation") or {}).get("targets") or []
                     for target in targets:
