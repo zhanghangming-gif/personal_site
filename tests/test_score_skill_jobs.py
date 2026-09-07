@@ -16,6 +16,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "reviewed_pdfs"
 def test_skill_generates_exact_reviewed_pdf(api, monkeypatch, tmp_path, name, notes, pages):
     import score_skill_bridge as bridge
     monkeypatch.setenv("SCORE_SKILL_PYTHON", sys.executable)
+    monkeypatch.setenv("SCORE_ENABLE_REVIEWED_ADAPTER", "1")
     monkeypatch.setattr(api, "SCORE_DIR", str(tmp_path))
     job = tmp_path / name
     job.mkdir()

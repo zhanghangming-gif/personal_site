@@ -4371,9 +4371,11 @@ def process_score_job(job_id, request, progress):
                 warnings.append("扫描谱增强识谱输入暂时不可用，已保留原 PDF 继续处理")
 
         generic_omr = False
+        use_reviewed_adapter = os.environ.get("SCORE_ENABLE_REVIEWED_ADAPTER", "0") == "1"
         processed = (process_agent_score(job_dir, request, progress)
                      if engine == "deepseek-agent" else
-                     try_skill_transposition(prepared_pdf, job_dir, request, progress))
+                     try_skill_transposition(prepared_pdf, job_dir, request, progress)
+                     if use_reviewed_adapter else None)
         if processed is None:
             generic_omr = True
             instrument_mode = request.get("transposeMode") == "instrument"
