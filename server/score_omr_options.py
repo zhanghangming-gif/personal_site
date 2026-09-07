@@ -8,7 +8,7 @@ remaining disagreement so later verification can keep those claims separate.
 
 RISK_DIMENSIONS = (
     'emptyScore', 'exportErrors', 'pdfMeasureConflicts', 'bookStructureIssue',
-    'timelineOverflows', 'timelineGaps', 'unresolvedMultirests',
+    'timelineAnomalies', 'timelineOverflows', 'timelineGaps', 'unresolvedMultirests',
 )
 
 
@@ -20,9 +20,11 @@ def recognition_families(preflight):
 def recognition_risk(analysis, xml_notes):
     conflicts = analysis.get('pdfSourceAudit', {}).get('measureConflicts', [])
     timeline = analysis.get('timelineRisk') or {}
+    gaps = int(timeline.get('gapCount') or 0)
+    overflows = int(timeline.get('overflowCount') or 0)
     return (int(xml_notes == 0), len(analysis.get('exportErrors', [])), len(conflicts),
-            int(bool(analysis.get('bookIssue'))), int(timeline.get('overflowCount') or 0),
-            int(timeline.get('gapCount') or 0), len(analysis.get('multirestMissing', [])))
+            int(bool(analysis.get('bookIssue'))), gaps + overflows, overflows, gaps,
+            len(analysis.get('multirestMissing', [])))
 
 
 def needs_alternative(analysis, xml_notes):

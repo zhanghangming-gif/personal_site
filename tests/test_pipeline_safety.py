@@ -40,6 +40,17 @@ def test_recognition_timeline_risk_triggers_alternative_and_candidate_ranking(ap
     assert api.recognition_decision([weak, complete])['selectedAttemptId'] == 'complete'
 
 
+def test_candidate_ranking_minimizes_total_timeline_anomalies(api):
+    fewer_total = api.recognition_attempt('fewer', 'Bravura', {
+        'timelineRisk': {'analyzedMeasures': 200, 'gapCount': 25, 'overflowCount': 1},
+    }, 317)
+    no_overflow_but_more_gaps = api.recognition_attempt('more', 'Bravura', {
+        'timelineRisk': {'analyzedMeasures': 200, 'gapCount': 38, 'overflowCount': 0},
+    }, 321)
+    decision = api.recognition_decision([fewer_total, no_overflow_but_more_gaps])
+    assert decision['selectedAttemptId'] == 'fewer'
+
+
 def test_repair_failure_continues_original_as_unverified_candidate(api, monkeypatch, tmpdir):
     tmp_path = Path(str(tmpdir))
     input_pdf = tmp_path / "input.pdf"
