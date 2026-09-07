@@ -118,6 +118,24 @@ def test_audiveris_sanitizer_normalizes_small_head_in_regular_chord(api, tmp_pat
     assert root.find('./sig/inters/head').attrib['shape'] == 'WHOLE_NOTE'
 
 
+def test_musescore_layout_does_not_duplicate_imported_measure_numbers(api, tmp_path):
+    source = tmp_path / 'source.mscx'
+    target = tmp_path / 'target.mscx'
+    source.write_text(
+        '<museScore><Score><Style><showMeasureNumber>1</showMeasureNumber>'
+        '</Style><Staff/></Score></museScore>', encoding='utf-8')
+    api.patch_musescore_layout(str(source), str(target), 8.5, 11.0, 1.7)
+    root = ET.parse(target).getroot()
+    assert root.find('./Score/Style/showMeasureNumber').text == '0'
+
+
+def test_generated_musescore_style_disables_automatic_measure_numbers(api, tmp_path):
+    target = tmp_path / 'style.mss'
+    api.write_musescore_style(str(target), 1.7)
+    root = ET.parse(target).getroot()
+    assert root.find('./Style/showMeasureNumber').text == '0'
+
+
 def test_repair_failure_continues_original_as_unverified_candidate(api, monkeypatch, tmpdir):
     tmp_path = Path(str(tmpdir))
     input_pdf = tmp_path / "input.pdf"

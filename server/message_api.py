@@ -3398,7 +3398,10 @@ def patch_musescore_layout(input_path, output_path, page_width, page_height, spa
         "minNoteDistance": "0.12",
         "barNoteDistance": "0.45",
         "measureSpacing": "0.60",
-        "showMeasureNumber": "1",
+        # MusicXML imports retain printed/system-start numbers as explicit
+        # overrides. Enabling MuseScore's automatic counter at the same time
+        # creates duplicate, often off-by-one labels after pickup measures.
+        "showMeasureNumber": "0",
         "measureNumberSystem": "1",
         "measureNumberAllStaffs": "0",
     }
@@ -3664,7 +3667,7 @@ def write_musescore_style(path, spatium, page_width=8.2677, page_height=11.6929)
     <minNoteDistance>0.18</minNoteDistance>
     <barNoteDistance>0.55</barNoteDistance>
     <measureSpacing>0.78</measureSpacing>
-    <showMeasureNumber>1</showMeasureNumber>
+    <showMeasureNumber>0</showMeasureNumber>
     <measureNumberSystem>1</measureNumberSystem>
     <measureNumberAllStaffs>0</measureNumberAllStaffs>
   </Style>
