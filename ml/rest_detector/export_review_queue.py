@@ -260,7 +260,17 @@ def structure_system_records(job_dir, document, document_hash, image_dir, dpi,
         staff_top = max(crop[1], bbox[1])
         staff_bottom = min(crop[3], bbox[3])
         half_width = max(0.55, spacing * 0.16)
-        for x in system.get("barlines") or []:
+        raw_barlines = []
+        for value in system.get("barlines") or []:
+            try:
+                raw_barlines.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        raw_barlines = sorted(set(raw_barlines))
+        system_width = max(1.0, bbox[2] - bbox[0])
+        maximum_credible_barlines = max(14, int(system_width / (spacing * 6.0)) + 1)
+        geometry_is_crowded = len(raw_barlines) > maximum_credible_barlines
+        for x in ([] if geometry_is_crowded else raw_barlines):
             if len(prelabels) >= 32:
                 break
             try:
@@ -290,7 +300,10 @@ def structure_system_records(job_dir, document, document_hash, image_dir, dpi,
             "cropBasis": system.get("basis") or "pdf_vector_geometry",
             "imageSource": "source_pdf", "dpi": structure_dpi,
             "prelabel": prelabels[0] if prelabels else None,
-            "prelabels": prelabels, "classificationStatus": "structure_geometry_prelabel",
+            "prelabels": prelabels,
+            "classificationStatus": ("structure_geometry_suppressed_dense_verticals"
+                                     if geometry_is_crowded else
+                                     "structure_geometry_prelabel"),
             "state": state, "annotation": old.get("annotation"),
             "annotator": old.get("annotator"), "reviewedAt": old.get("reviewedAt"),
         })

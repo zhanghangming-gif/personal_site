@@ -1,4 +1,4 @@
-import { BoxSelect, Check, Download, RefreshCw, RotateCcw, SkipForward, Trash2, X } from 'lucide-react';
+import { BoxSelect, Check, Download, Eye, EyeOff, RefreshCw, RotateCcw, SkipForward, Trash2, X } from 'lucide-react';
 import { PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../services/api';
 
@@ -77,6 +77,7 @@ export function RestAnnotationPanel() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [activeTarget, setActiveTarget] = useState(0);
   const [drawMode, setDrawMode] = useState(false);
+  const [showBoxes, setShowBoxes] = useState(true);
   const [draft, setDraft] = useState<number[] | null>(null);
   const [reason, setReason] = useState('');
   const [notice, setNotice] = useState('');
@@ -107,7 +108,8 @@ export function RestAnnotationPanel() {
   }, [selected?.sampleId, selected?.revision]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = targets[activeTarget];
-  const selectedClass = active?.class || selected?.prelabel?.class || queue?.classes[0] || 'quarter_rest';
+  const selectedClass = active?.class || selected?.prelabel?.class ||
+    (selected?.taskType === 'structure' ? 'barline' : 'quarter_rest');
   const reviewedProgress = queue ? queue.counts.trainingReady : 0;
   const allCount = queue?.counts.total || 0;
 
@@ -190,16 +192,17 @@ export function RestAnnotationPanel() {
       <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(340px,.7fr)]">
         <article className="overflow-hidden rounded-3xl border bg-white dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4 dark:border-slate-800"><div><strong>第 {selected.page || '?'} 页 · {selected.taskType === 'structure' ? '谱表结构' : selected.measureId || '未知小节'} · 声部 {selected.voice || '?'}</strong><p className="mt-1 text-xs text-slate-500">文档 {selected.documentSha256?.slice(0, 12)}… · {selected.taskType === 'structure' ? '结构检测裁片' : `缺口 ${selected.duration || '?'}`} · {selected.imageSource === 'audiveris_binary' ? 'OMR 二值图' : '原 PDF 高清裁片'}</p></div><span className="tag">{stateLabels[selected.state]}</span></div>
+          {selected.classificationStatus === 'structure_geometry_suppressed_dense_verticals' && <p className="mx-4 mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">本行音符符干过密，系统已撤销不可靠的小节线预标。请只给真正贯穿五线谱的小节线手工画框。</p>}
           <div className="relative m-4 overflow-hidden rounded-2xl border bg-white shadow-inner" style={{ aspectRatio: `${selected.imageWidth}/${selected.imageHeight}` }}>
             <img src={selected.imageUrl} alt="待标注休止符局部谱面" className="absolute inset-0 h-full w-full select-none object-contain" draggable={false}/>
             <svg viewBox={`0 0 ${selected.imageWidth} ${selected.imageHeight}`} className={`absolute inset-0 h-full w-full touch-none ${drawMode ? 'cursor-crosshair' : 'cursor-default'}`} onPointerDown={startDraw} onPointerMove={moveDraw} onPointerUp={finishDraw} onPointerCancel={finishDraw}>
-              {boxes.map((box, index) => <g key={`${index}-${box.join('-')}`} onPointerDown={event => { if (!drawMode && index < targets.length) { event.stopPropagation(); setActiveTarget(index); } }}><rect x={box[0]} y={box[1]} width={box[2]-box[0]} height={box[3]-box[1]} fill={index === activeTarget ? 'rgba(10,132,255,.14)' : 'rgba(52,199,89,.10)'} stroke={index === activeTarget ? '#0a84ff' : '#22c55e'} strokeWidth={Math.max(2, selected.imageWidth / 320)} vectorEffect="non-scaling-stroke"/><text x={box[0]} y={Math.max(12, box[1]-4)} fill={index === activeTarget ? '#0a84ff' : '#15803d'} fontSize={Math.max(12, selected.imageWidth / 34)} fontWeight="700">{index + 1}</text></g>)}
+              {showBoxes && boxes.map((box, index) => <g key={`${index}-${box.join('-')}`} onPointerDown={event => { if (!drawMode && index < targets.length) { event.stopPropagation(); setActiveTarget(index); } }}><rect x={box[0]} y={box[1]} width={box[2]-box[0]} height={box[3]-box[1]} fill={index === activeTarget ? 'rgba(10,132,255,.08)' : 'rgba(52,199,89,.025)'} stroke={index === activeTarget ? '#0a84ff' : '#22c55e'} strokeWidth={Math.max(1.2, selected.imageWidth / 900)} vectorEffect="non-scaling-stroke"/><text x={box[0]} y={Math.max(12, box[1]-4)} fill={index === activeTarget ? '#0a84ff' : '#15803d'} fontSize={Math.max(11, selected.imageWidth / 80)} fontWeight="700">{index + 1}</text></g>)}
             </svg>
           </div>
           <p className="px-5 pb-5 text-xs leading-5 text-slate-500">框要紧贴目标主体并保留少量边缘。多小节休止横线和上方数字必须分别标框；行首号、排练标记和拍号还要填写框内文字。</p>
         </article>
         <aside className="space-y-4">
-          <section className="rounded-3xl border bg-white p-5 dark:border-slate-800 dark:bg-slate-900"><h2 className="text-lg font-bold">标注操作</h2><div className="mt-4 grid gap-2"><button disabled={!(selected.prelabels?.length || selected.prelabel) || busy} onClick={acceptPrelabel} className="button-primary w-full"><Check size={16}/>接受全部预标</button><button disabled={busy} onClick={() => setDrawMode(value => !value)} className={`button-secondary w-full ${drawMode ? 'border-blue-500 text-blue-600' : ''}`}><BoxSelect size={16}/>{drawMode ? '请在谱面上拖出目标框' : '新增目标框'}</button></div>
+          <section className="rounded-3xl border bg-white p-5 dark:border-slate-800 dark:bg-slate-900"><h2 className="text-lg font-bold">标注操作</h2><div className="mt-4 grid gap-2"><button disabled={!(selected.prelabels?.length || selected.prelabel) || busy} onClick={acceptPrelabel} className="button-primary w-full"><Check size={16}/>接受全部预标</button><button disabled={busy} onClick={() => setDrawMode(value => !value)} className={`button-secondary w-full ${drawMode ? 'border-blue-500 text-blue-600' : ''}`}><BoxSelect size={16}/>{drawMode ? '请在谱面上拖出目标框' : '新增目标框'}</button><button onClick={() => setShowBoxes(value => !value)} className="button-secondary w-full">{showBoxes ? <EyeOff size={16}/> : <Eye size={16}/>} {showBoxes ? '暂时隐藏标注框' : '显示标注框'}</button></div>
             {active && <div className="mt-5 space-y-4 rounded-2xl bg-slate-50 p-4 dark:bg-slate-950">
               <div className="flex items-center justify-between"><strong className="text-sm">目标框 {activeTarget + 1}</strong><button className="text-red-500" onClick={() => { setTargets(current => current.filter((_, index) => index !== activeTarget)); setActiveTarget(0); }}><Trash2 size={17}/></button></div>
               <label className="block text-sm font-semibold">类别<select value={active.class} onChange={event => setTarget({ class: event.target.value, dots: restClasses.has(event.target.value) ? active.dots : 0, text: textClasses.has(event.target.value) ? active.text : undefined })} className="mt-2 min-h-11 w-full border bg-white px-3 text-slate-900 dark:bg-slate-950 dark:text-white">{queue?.classes.map(value => <option className="bg-white text-slate-900 dark:bg-slate-950 dark:text-white" key={value} value={value}>{classLabels[value] || value}</option>)}</select><span className="mt-2 block text-xs font-normal leading-5 text-slate-500">{classDescriptions[active.class]}</span></label>

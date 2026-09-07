@@ -107,3 +107,21 @@ def test_structure_crop_stops_between_adjacent_staff_systems(tmp_path):
     middle = next(item for item in records if item['gapId'] == 'structure-p1-s2')
     assert middle['crop'][1] == 65
     assert middle['crop'][3] == 115
+
+
+def test_dense_vertical_candidates_are_not_published_as_barline_prelabels(tmp_path):
+    exporter = exporter_module()
+    job = tmp_path / 'dense-note-stems'
+    (job / 'inspection').mkdir(parents=True)
+    pdf = fitz.open(); pdf.new_page(width=320, height=160)
+    pdf.save(str(job / 'input.pdf')); pdf.close()
+    (job / 'inspection' / 'structure-candidates.json').write_text(json.dumps({
+        'pages': [{'page': 1, 'systems': [{
+            'candidateIndex': 1, 'bbox': [20, 60, 300, 100],
+            'staffSpacing': 5, 'barlines': list(range(20, 301, 10)),
+        }]}],
+    }), encoding='utf-8')
+    images = tmp_path / 'dataset' / 'images'; images.mkdir(parents=True)
+    sample = exporter.export_job(job, images, 800, {}, include_structure=True)[0]
+    assert sample['prelabels'] == []
+    assert sample['classificationStatus'] == 'structure_geometry_suppressed_dense_verticals'
