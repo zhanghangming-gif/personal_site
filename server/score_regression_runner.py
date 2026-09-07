@@ -12,7 +12,10 @@ import shutil
 import time
 import traceback
 
-from message_api import process_score_pdf, read_pipeline_report
+from message_api import (
+    inspect_score_pdf, preflight_pdf, prepare_omr_variant, preserve_score_headers,
+    process_score_pdf, read_pipeline_report, write_pipeline_report,
+)
 
 
 def write_json(path, payload):
@@ -53,7 +56,38 @@ def run(input_dir, output_dir, limit=0):
         started = time.time()
         row = {"index": index, "name": os.path.basename(source), "workspace": stem}
         try:
-            process_score_pdf(copied, workspace, 0, "auto")
+            prepared, preflight = preflight_pdf(copied, workspace)
+            try:
+                inspection = inspect_score_pdf(copied, workspace, preflight)
+            except (RuntimeError, OSError, ValueError) as exc:
+                inspection = {"status": "unavailable", "reason": str(exc)}
+            omr_variant = None
+            if (inspection.get("scoreProfile") or {}).get("documentType") in ("scan", "mixed"):
+                try:
+                    omr_variant, _variant_report = prepare_omr_variant(copied, workspace, 300)
+                except (RuntimeError, OSError, ValueError):
+                    omr_variant = None
+            output_pdf, _summary, verification = process_score_pdf(
+                prepared, workspace, 0, "auto", preflight=preflight,
+                inspection=inspection, omr_variant=omr_variant,
+            )
+            try:
+                preserved_pdf, static_content = preserve_score_headers(
+                    workspace, copied, output_pdf)
+                if os.path.abspath(preserved_pdf) != os.path.abspath(output_pdf):
+                    shutil.copyfile(preserved_pdf, output_pdf)
+                static_content["status"] = "applied"
+            except (RuntimeError, OSError, ValueError) as exc:
+                static_content = {
+                    "status": "skipped", "reason": str(exc),
+                    "semanticVerification": False,
+                }
+            verification["staticContentPreservation"] = static_content
+            current_report = read_pipeline_report(workspace)
+            write_pipeline_report(
+                workspace, current_report.get("pipeline") or {}, verification,
+                current_report.get("artifacts") or {},
+            )
             report = read_pipeline_report(workspace)
             pipeline = report.get("pipeline") or {}
             verification = report.get("verification") or {}
@@ -72,6 +106,17 @@ def run(input_dir, output_dir, limit=0):
                     "lineNumberCoverage": metrics.get("lineNumberCoverage"),
                 })
             rhythm = verification.get("rhythmGapDetection") or {}
+            # ``verification.summary`` is the human-readable review sentence.
+            # Machine-readable counts live in ``verification.output``.  Keep the
+            # regression runner tolerant of older reports that used a mapping in
+            # ``summary`` so a completed pipeline is never mislabeled as crashed
+            # merely while its metrics are being collected.
+            output_metrics = verification.get("output") or {}
+            if not isinstance(output_metrics, dict):
+                output_metrics = {}
+            legacy_summary = verification.get("summary") or {}
+            if not isinstance(legacy_summary, dict):
+                legacy_summary = {}
             row.update({
                 "status": pipeline.get("overallStatus", "UNKNOWN"),
                 "stage": pipeline.get("stage", ""),
@@ -84,8 +129,8 @@ def run(input_dir, output_dir, limit=0):
                 "reviewMetrics": {
                     "rhythmGaps": rhythm.get("gapCount"),
                     "rhythmOverflows": rhythm.get("overflowCount"),
-                    "measureCount": (verification.get("summary") or {}).get("measures"),
-                    "noteEvents": (verification.get("summary") or {}).get("notes"),
+                    "measureCount": output_metrics.get("measures", legacy_summary.get("measures")),
+                    "noteEvents": output_metrics.get("noteEvents", legacy_summary.get("notes")),
                 },
             })
         except Exception as exc:
