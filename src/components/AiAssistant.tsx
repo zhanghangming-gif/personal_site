@@ -29,6 +29,27 @@ function initialPanelPosition(): PanelPosition | null {
   return null;
 }
 
+function publicKnowledgeFallback(question: string, en: boolean) {
+  const normalized = question.toLowerCase();
+  if (/转调|移调|乐谱|score|transpos/.test(normalized)) {
+    return en
+      ? 'Open “Tools” at the top of the site and choose “Score transposition.” Upload a score PDF, choose the source and target instrument or a semitone shift, then select all pages or enter a range such as 1-3,5,8. The result includes only the selected pages; review the notes before using the PDF, and use online editing when editable data is available.'
+      : '从网站顶部“工具”进入“乐谱转调”，上传五线谱 PDF 后选择原乐器和目标乐器，或直接填写升降半音数。你可以转换全部页面，也可以输入“1-3,5,8”指定页码；结果只包含所选页面。生成后请先查看复核提示，有可编辑数据时还可以在线修改并重新生成。';
+  }
+  if (/(张航铭|zhang hangming)/.test(normalized) && /(谁|介绍|who|introduc)/.test(normalized)) {
+    return en
+      ? 'Zhang Hangming is an undergraduate Robotics Engineering student in Chongqing University’s Mingyue Innovation Program. His work and studies focus on robotics and practical engineering projects, and he also performs clarinet in the university student art ensemble. You can explore the Projects, Experience, and Honors sections for details.'
+      : '张航铭是重庆大学国家卓越工程师学院明月科创实验班机器人工程专业本科生，主要参与机器人与工程实践项目，也长期参加单簧管演奏和学生艺术团活动。网站的“项目、经历、荣誉”栏目可以查看更完整的介绍。';
+  }
+  if (/联系|邮箱|contact|email/.test(normalized)) {
+    return en ? 'You can contact Zhang Hangming at 2361312720@qq.com or leave a message on the website.' : '可以发送邮件到 2361312720@qq.com，或在网站留言页面联系张航铭。';
+  }
+  if (/获奖|荣誉|award|honor/.test(normalized)) {
+    return en ? 'His main recognitions include national ROBOCON awards and a 2026 MCM Honorable Mention. The Honors section contains the complete public list and certificates.' : '他的主要荣誉包括全国大学生机器人大赛 ROBOCON 相关奖项和 2026 年美国大学生数学建模竞赛 H 奖；完整公开列表和证书可在“荣誉”栏目查看。';
+  }
+  return '';
+}
+
 export function AiAssistant({ docked = false }: { docked?: boolean }) {
   const { language } = useLanguage();
   const { play } = useSound();
@@ -175,19 +196,20 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', content: answer }]);
       play('aiDone');
     } catch (error) {
-      play('error');
+      const fallback = publicKnowledgeFallback(content, en);
+      play(fallback ? 'aiDone' : 'error');
       setMessages((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content:
+          content: fallback || (
             error instanceof Error
               ? error.message
               : en
                 ? 'The AI assistant is temporarily unavailable. Please try again later.'
-                : 'AI 助手暂时无法回答，请稍后再试',
-          transient: true,
+                : 'AI 助手暂时无法回答，请稍后再试'),
+          transient: !fallback,
         },
       ]);
     } finally {

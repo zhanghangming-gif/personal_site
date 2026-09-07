@@ -5556,12 +5556,19 @@ class Handler(BaseHTTPRequestHandler):
         messages.append({"role": "user", "content": question})
         payload = json.dumps({"model": DEEPSEEK_MODEL, "messages": messages, "temperature": 0.35, "max_tokens": 900}, ensure_ascii=False).encode()
         request = Request(DEEPSEEK_API_URL, data=payload, headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}, method="POST")
-        try:
-            with urlopen(request, timeout=30) as response: result = json.loads(response.read().decode())
-            answer = result["choices"][0]["message"]["content"]
-            return self.json_response(200, {"success": True, "data": {"answer": answer}})
-        except (HTTPError, URLError, KeyError, json.JSONDecodeError):
-            return self.json_response(502, {"success": False, "message": "AI 服务响应异常，请稍后再试"})
+        for attempt in range(2):
+            try:
+                with urlopen(request, timeout=30) as response:
+                    result = json.loads(response.read().decode())
+                answer = result["choices"][0]["message"]["content"]
+                if not isinstance(answer, str) or not answer.strip():
+                    raise ValueError("empty assistant answer")
+                return self.json_response(200, {"success": True, "data": {"answer": answer.strip()}})
+            except (HTTPError, URLError, KeyError, ValueError) as exc:
+                logging.warning("AI guide request failed on attempt %s: %s", attempt + 1, type(exc).__name__)
+                if attempt == 0:
+                    time.sleep(0.45)
+        return self.json_response(502, {"success": False, "message": "AI 服务响应异常，请稍后再试"})
 
 
 if __name__ == "__main__":
