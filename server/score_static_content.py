@@ -54,14 +54,33 @@ def preserve_headers(source_pdf, target_pdf, source_structures, target_structure
         if width_delta > 2 or height_delta > 2:
             raise ValueError("源谱与候选谱页面尺寸不一致")
         page = output.new_page(width=source_rect.width, height=source_rect.height)
-        page.show_pdf_page(page.rect, target, index - 1, keep_proportion=False)
-
         source_box = source_first.get(index)
         target_box = target_first.get(index)
         if not source_box or not target_box:
+            page.show_pdf_page(page.rect, target, index - 1, keep_proportion=False)
             pages.append({"page": index, "status": "skipped", "reason": "缺少首个谱表坐标"})
             continue
-        bottom = min(float(source_box[1]), float(target_box[1]), source_rect.height)
+        source_bottom = min(float(source_box[1]), source_rect.height)
+        target_top = min(float(target_box[1]), target_rect.height)
+        reflowed = (
+            source_bottom > target_top + 2
+            and source_bottom < source_rect.height - 18
+            and target_top < target_rect.height - 18
+        )
+        if reflowed:
+            # Reserve the source's complete title/running-header band. The
+            # target notation begins at its detected first-system band and is
+            # fitted into the remaining page, so preserving a taller source
+            # title never paints over the first staff.
+            target_clip = pymupdf.Rect(0, target_top, target_rect.width, target_rect.height)
+            target_destination = pymupdf.Rect(
+                0, source_bottom, source_rect.width, source_rect.height)
+            page.show_pdf_page(target_destination, target, index - 1,
+                               clip=target_clip, keep_proportion=False)
+            bottom = source_bottom
+        else:
+            page.show_pdf_page(page.rect, target, index - 1, keep_proportion=False)
+            bottom = min(source_bottom, target_top)
         # Very small bands contain neither a title nor a usable running header.
         if bottom < 18:
             pages.append({"page": index, "status": "skipped", "reason": "安全标题区过小"})
@@ -75,6 +94,7 @@ def preserve_headers(source_pdf, target_pdf, source_structures, target_structure
             "page": index,
             "status": "preserved",
             "bbox": [round(value, 4) for value in destination],
+            "targetNotationFittedBelowHeader": reflowed,
         })
 
     output_path = Path(output_pdf)

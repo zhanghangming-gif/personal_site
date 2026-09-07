@@ -35,6 +35,33 @@ def test_header_preservation_keeps_source_title_and_target_music(api, tmp_path):
     assert report["preservedPages"] == 1
 
 
+def test_taller_source_title_band_moves_target_notation_below_it(api, tmp_path):
+    import pymupdf
+    from score_static_content import preserve_headers
+
+    source = tmp_path / "source-tall.pdf"
+    target = tmp_path / "target-high.pdf"
+    output = tmp_path / "output-fitted.pdf"
+    make_pdf(source, "COMPLETE SOURCE TITLE", "OLD MUSIC")
+    make_pdf(target, "BROKEN TITLE", "NEW MUSIC")
+    source_map = tmp_path / "source-tall.json"
+    target_map = tmp_path / "target-high.json"
+    source_map.write_text(json.dumps({
+        "pages": [{"page": 1, "systems": [{"bbox": [25, 75, 275, 135]}]}]
+    }), encoding="utf-8")
+    target_map.write_text(json.dumps({
+        "pages": [{"page": 1, "systems": [{"bbox": [25, 25, 275, 85]}]}]
+    }), encoding="utf-8")
+
+    report = preserve_headers(source, target, source_map, target_map, output)
+    document = pymupdf.open(output)
+    text = document[0].get_text()
+    assert "COMPLETE SOURCE TITLE" in text
+    assert "NEW MUSIC" in text
+    assert "BROKEN TITLE" not in text
+    assert report["pages"][0]["targetNotationFittedBelowHeader"] is True
+
+
 def test_musicxml_layout_keeps_all_nonempty_credits(api):
     import xml.etree.ElementTree as ET
 
