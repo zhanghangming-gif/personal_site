@@ -3199,8 +3199,10 @@ def newest_omr_file(root_dir):
     return max(candidates, key=lambda item: os.path.getmtime(item)) if candidates else ""
 
 
-def retry_audiveris_export(audiveris, omr_book, job_dir, timeout):
-    retry_dir = os.path.join(job_dir, "omr-export-retry")
+def retry_audiveris_export(audiveris, omr_book, job_dir, timeout,
+                           directory_name="omr-export-retry",
+                           label="Audiveris 安全二次导出"):
+    retry_dir = os.path.join(job_dir, directory_name)
     os.makedirs(retry_dir, exist_ok=True)
     sanitized_book = os.path.join(retry_dir, "sanitized.omr")
     removed_wedges = sanitize_audiveris_book(omr_book, sanitized_book)
@@ -3210,7 +3212,7 @@ def retry_audiveris_export(audiveris, omr_book, job_dir, timeout):
         list(audiveris) + ["-batch", "-export", "-output", retry_dir, sanitized_book],
         job_dir,
         timeout,
-        "Audiveris 安全二次导出",
+        label,
     )
     analysis = analyze_audiveris_output(output)
     musicxml = newest_musicxml_file(retry_dir)
@@ -3843,6 +3845,26 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
             alternate_book = newest_omr_file(alternative_dir)
             if alternate_xml and alternate_book:
                 alternate = analyze_audiveris_output(log)
+                if alternate.get("exportErrors"):
+                    original_errors = list(alternate["exportErrors"])
+                    try:
+                        alternate_xml, removed_wedges, retry_analysis = retry_audiveris_export(
+                            audiveris, alternate_book, job_dir, timeout,
+                            "omr-alternative-export-retry",
+                            "Audiveris 高清候选安全二次导出",
+                        )
+                        alternate["exportErrorsOriginal"] = original_errors
+                        alternate["exportErrors"] = retry_analysis.get("exportErrors") or []
+                        alternate["exportRecovery"] = {
+                            "recoveredMeasures": original_errors,
+                            "removedWedgeRelations": removed_wedges,
+                        }
+                    except RuntimeError as exc:
+                        alternate["exportRecovery"] = {
+                            "recoveredMeasures": [],
+                            "failedMeasures": original_errors,
+                            "error": str(exc),
+                        }
                 alternate.update(analyze_audiveris_book(alternate_book))
                 if preflight:
                     apply_pdf_anchors(alternate, preflight)

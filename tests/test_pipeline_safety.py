@@ -51,6 +51,33 @@ def test_candidate_ranking_minimizes_total_timeline_anomalies(api):
     assert decision['selectedAttemptId'] == 'fewer'
 
 
+def test_export_retry_can_isolate_alternative_candidate(api, monkeypatch, tmp_path):
+    book = tmp_path / 'candidate.omr'
+    book.write_bytes(b'fixture')
+    def sanitize(source, target):
+        Path(target).write_bytes(b'safe')
+        return 1
+
+    monkeypatch.setattr(api, 'sanitize_audiveris_book', sanitize)
+    monkeypatch.setattr(api, 'analyze_audiveris_output',
+                        lambda output: {'exportErrors': []})
+
+    def run(command, job_dir, timeout, label):
+        output_index = command.index('-output') + 1
+        directory = Path(command[output_index])
+        (directory / 'sanitized.musicxml').write_text(
+            '<score-partwise/>', encoding='utf-8')
+        assert label == 'alternate retry'
+        return ''
+
+    monkeypatch.setattr(api, 'run_command', run)
+    result, removed, _ = api.retry_audiveris_export(
+        ['audiveris'], str(book), str(tmp_path), 30,
+        'omr-alternative-export-retry', 'alternate retry')
+    assert Path(result).parent.name == 'omr-alternative-export-retry'
+    assert removed == 1
+
+
 def test_repair_failure_continues_original_as_unverified_candidate(api, monkeypatch, tmpdir):
     tmp_path = Path(str(tmpdir))
     input_pdf = tmp_path / "input.pdf"
