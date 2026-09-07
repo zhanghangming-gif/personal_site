@@ -13,8 +13,9 @@ import time
 import traceback
 
 from message_api import (
-    inspect_score_pdf, preflight_pdf, prepare_omr_variant, preserve_score_headers,
-    process_score_pdf, read_pipeline_report, write_pipeline_report,
+    inspect_rendered_score_pdf, inspect_score_pdf, preflight_pdf,
+    prepare_omr_variant, preserve_score_headers, process_score_pdf,
+    read_pipeline_report, write_pipeline_report,
 )
 
 
@@ -72,6 +73,8 @@ def run(input_dir, output_dir, limit=0):
                 inspection=inspection, omr_variant=omr_variant,
             )
             try:
+                inspect_rendered_score_pdf(
+                    output_pdf, workspace, (_summary or {}).get("outputPages") or 1)
                 preserved_pdf, static_content = preserve_score_headers(
                     workspace, copied, output_pdf)
                 if os.path.abspath(preserved_pdf) != os.path.abspath(output_pdf):

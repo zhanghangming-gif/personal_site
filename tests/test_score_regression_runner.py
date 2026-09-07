@@ -42,6 +42,7 @@ def test_human_readable_verification_summary_does_not_crash_metrics_collection(
     monkeypatch.setattr(runner, "inspect_score_pdf", lambda *_args: {
         "scoreProfile": {"documentType": "vector"},
     })
+    monkeypatch.setattr(runner, "inspect_rendered_score_pdf", lambda *_args: {})
     monkeypatch.setattr(runner, "preserve_score_headers", fake_preserve)
     monkeypatch.setattr(runner, "write_pipeline_report", lambda *_args: None)
     monkeypatch.setattr(runner, "read_pipeline_report", fake_report)
