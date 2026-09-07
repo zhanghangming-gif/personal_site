@@ -56,11 +56,37 @@ def run(input_dir, output_dir, limit=0):
             process_score_pdf(copied, workspace, 0, "auto")
             report = read_pipeline_report(workspace)
             pipeline = report.get("pipeline") or {}
+            verification = report.get("verification") or {}
+            omr = verification.get("omr") or {}
+            decision = omr.get("recognitionDecision") or {}
+            attempts = []
+            for attempt in omr.get("recognitionAttempts") or []:
+                metrics = attempt.get("metrics") or {}
+                attempts.append({
+                    "attemptId": attempt.get("attemptId"),
+                    "selected": bool(attempt.get("selected")),
+                    "representation": (attempt.get("input") or {}).get("representation"),
+                    "noteEvents": metrics.get("noteEvents"),
+                    "timelineGaps": metrics.get("timelineGaps"),
+                    "timelineOverflows": metrics.get("timelineOverflows"),
+                    "lineNumberCoverage": metrics.get("lineNumberCoverage"),
+                })
+            rhythm = verification.get("rhythmGapDetection") or {}
             row.update({
                 "status": pipeline.get("overallStatus", "UNKNOWN"),
                 "stage": pipeline.get("stage", ""),
                 "outputAvailable": os.path.isfile(os.path.join(workspace, "output.pdf")),
                 "failureCategories": failure_categories(report),
+                "recognition": {
+                    "selectedAttemptId": decision.get("selectedAttemptId"),
+                    "attempts": attempts,
+                },
+                "reviewMetrics": {
+                    "rhythmGaps": rhythm.get("gapCount"),
+                    "rhythmOverflows": rhythm.get("overflowCount"),
+                    "measureCount": (verification.get("summary") or {}).get("measures"),
+                    "noteEvents": (verification.get("summary") or {}).get("notes"),
+                },
             })
         except Exception as exc:
             row.update({
