@@ -48,6 +48,7 @@ from score_workspace import ScoreWorkspace
 from score_render_plan import build_render_plan
 from score_visual_audit import compare_visual_layout
 from score_system_composer_bridge import compose_score_systems
+from score_static_content_bridge import preserve_score_headers
 from score_ai_review_bridge import run_ai_visual_review
 from score_transposition import transpose_tree, pitch_number
 from score_render_audit import compare_rendered_score, exported_layout
@@ -1136,27 +1137,20 @@ def musicxml_systems(root):
 
 
 def normalize_musicxml_layout(root):
-    page_one_untyped = 0
+    """Keep every non-empty page credit produced by OMR.
+
+    Credits contain more than the work title: part names, subtitles, composers,
+    arrangers, copyright lines, running headers and printed page numbers all use
+    the same MusicXML container.  Earlier code retained only a short allow-list
+    on page one, which silently discarded valid static score content before
+    MuseScore ever saw it.
+    """
     for item in list(root):
         if local_name(item.tag) != "credit":
             continue
-        page = int(item.attrib.get("page", "1"))
         words = [node for node in list(item) if local_name(node.tag) == "credit-words"]
         text = " ".join((node.text or "").strip() for node in words).strip()
-        credit_types = {
-            (node.text or "").strip().lower()
-            for node in list(item)
-            if local_name(node.tag) == "credit-type"
-        }
-        keep = False
-        if not text or re.fullmatch(r"[\s\d.,'`-]+", text):
-            keep = False
-        elif page == 1 and credit_types.intersection({"title", "subtitle", "composer", "lyricist", "rights"}):
-            keep = True
-        elif page == 1 and not credit_types and page_one_untyped < 3:
-            keep = True
-            page_one_untyped += 1
-        if not keep:
+        if not text:
             root.remove(item)
 
 
@@ -3917,6 +3911,25 @@ def process_score_job(job_id, request, progress):
             expected_pages = summary.get("outputPages") or source_pages
             target_inspection, visual_audit = inspect_candidate_layout(
                 output_pdf, job_dir, expected_pages, workspace, verification)
+            if generic_omr:
+                try:
+                    workspace.update_stage("rendering", "正在保留原谱标题、页眉和页码", 95)
+                    preserved_pdf, static_content = preserve_score_headers(
+                        job_dir, input_pdf, output_pdf)
+                    shutil.copy2(preserved_pdf, output_pdf)
+                    static_content["status"] = "applied"
+                    verification["staticContentPreservation"] = static_content
+                    static_report = os.path.join(
+                        job_dir, "review", "static-content-preservation.json")
+                    update_score_review_pdf_digest(job_dir, output_pdf)
+                    workspace.register_artifact("header-preserved-pdf", preserved_pdf)
+                    workspace.register_artifact("static-content-preservation", static_report)
+                except (RuntimeError, OSError, ValueError) as exc:
+                    verification["staticContentPreservation"] = {
+                        "status": "skipped", "reason": str(exc),
+                        "semanticVerification": False,
+                    }
+                    warnings.append("原谱标题区无法安全贴回，已保留识谱得到的标题文字供复核")
             if generic_omr and os.environ.get("SCORE_SYSTEM_COMPOSITOR", "0") == "1":
                 eligible, reason = system_composition_eligibility(target_inspection, visual_audit)
                 verification["systemComposition"] = {
