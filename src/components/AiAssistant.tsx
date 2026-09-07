@@ -1,5 +1,5 @@
-import { Bot, RotateCcw, Send, Sparkles, X } from 'lucide-react';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Bot, GripHorizontal, RotateCcw, Send, Sparkles, X } from 'lucide-react';
+import { FormEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { askAboutZhang, type ChatHistoryItem } from '../services/chatService';
 import { useLanguage } from '../context/LanguageContext';
 import { useSound } from '../hooks/useSound';
@@ -13,6 +13,21 @@ type Suggestion = {
   label: string;
   question: string;
 };
+
+type PanelPosition = { x: number; y: number };
+type DragState = { pointerId: number; offsetX: number; offsetY: number };
+
+const POSITION_KEY = 'ai-assistant-position';
+
+function initialPanelPosition(): PanelPosition | null {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(POSITION_KEY) || 'null');
+    if (Number.isFinite(value?.x) && Number.isFinite(value?.y)) return value;
+  } catch {
+    // Ignore obsolete or manually edited browser storage.
+  }
+  return null;
+}
 
 export function AiAssistant({ docked = false }: { docked?: boolean }) {
   const { language } = useLanguage();
@@ -51,8 +66,53 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
   const [messages, setMessages] = useState<DisplayMessage[]>([welcome]);
   const [loading, setLoading] = useState(false);
   const [hintVisible, setHintVisible] = useState(false);
+  const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(initialPanelPosition);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const dragRef = useRef<DragState | null>(null);
+
+  const boundedPosition = useCallback((x: number, y: number) => {
+    const panel = panelRef.current;
+    const width = panel?.offsetWidth ?? Math.min(380, window.innerWidth - 24);
+    const height = panel?.offsetHeight ?? Math.min(560, window.innerHeight - 144);
+    const margin = 12;
+    return {
+      x: Math.max(margin, Math.min(x, window.innerWidth - width - margin)),
+      y: Math.max(margin, Math.min(y, window.innerHeight - height - margin)),
+    };
+  }, []);
+
+  const startDragging = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+    };
+    setPanelPosition({ x: rect.left, y: rect.top });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const dragPanel = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setPanelPosition(boundedPosition(event.clientX - drag.offsetX, event.clientY - drag.offsetY));
+  };
+
+  const stopDragging = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const next = boundedPosition(event.clientX - drag.offsetX, event.clientY - drag.offsetY);
+    setPanelPosition(next);
+    window.localStorage.setItem(POSITION_KEY, JSON.stringify(next));
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -85,6 +145,18 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
       window.clearTimeout(hideTimer);
     };
   }, [open, language]);
+
+  useEffect(() => {
+    if (!open) return;
+    const keepVisible = () => setPanelPosition((current) => {
+      if (!current) return current;
+      const next = boundedPosition(current.x, current.y);
+      return next.x === current.x && next.y === current.y ? current : next;
+    });
+    keepVisible();
+    window.addEventListener('resize', keepVisible);
+    return () => window.removeEventListener('resize', keepVisible);
+  }, [boundedPosition, open]);
 
   const send = async (question: string) => {
     const content = question.trim();
@@ -132,10 +204,19 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
     <>
       {open && (
         <section
-          className="fixed inset-x-3 bottom-28 z-[70] flex max-h-[min(560px,calc(100vh-9rem))] flex-col overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] shadow-2xl sm:left-auto sm:right-5 sm:w-[380px]"
+          ref={panelRef}
+          className={`fixed z-[70] flex w-[calc(100vw-1.5rem)] max-w-[380px] max-h-[min(560px,calc(100vh-1.5rem))] flex-col overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] shadow-2xl ${panelPosition ? '' : 'bottom-28 left-3 sm:left-auto sm:right-5'}`}
+          style={panelPosition ? { left: panelPosition.x, top: panelPosition.y } : undefined}
           aria-label={en ? 'Zhang Hangming AI assistant' : '张航铭 AI 助手'}
         >
-          <header className="flex items-center justify-between border-b bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-white">
+          <header
+            className="relative flex touch-none cursor-grab select-none items-center justify-between border-b bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-white active:cursor-grabbing"
+            onPointerDown={startDragging}
+            onPointerMove={dragPanel}
+            onPointerUp={stopDragging}
+            onPointerCancel={stopDragging}
+            title={en ? 'Drag to move' : '按住拖动窗口'}
+          >
             <div className="flex items-center gap-3">
               <span className="grid h-8 w-8 place-items-center rounded-xl bg-white/15">
                 <Sparkles size={18} />
@@ -144,6 +225,7 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
                 <h2 className="text-sm font-bold">{en ? 'Zhang Hangming AI' : '张航铭 AI 助手'}</h2>
               </div>
             </div>
+            <GripHorizontal className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-white/65" size={20} />
             <div className="flex gap-1">
               <button
                 type="button"
