@@ -62,6 +62,36 @@ def test_taller_source_title_band_moves_target_notation_below_it(api, tmp_path):
     assert report["pages"][0]["targetNotationFittedBelowHeader"] is True
 
 
+def test_vector_staff_fallback_prevents_sparse_first_system_from_being_covered(api, tmp_path):
+    import pymupdf
+    from score_static_content import preserve_headers
+
+    source = tmp_path / "source-vector.pdf"
+    target = tmp_path / "target-vector.pdf"
+    output = tmp_path / "output-vector.pdf"
+    for path, label in ((source, "SOURCE TITLE"), (target, "TARGET TITLE")):
+        document = pymupdf.open()
+        page = document.new_page(width=300, height=200)
+        page.insert_text((20, 20), label)
+        for y in (60, 65, 70, 75, 80):
+            page.draw_line((20, y), (280, y), width=0.5)
+        document.save(path)
+        document.close()
+    source_map = tmp_path / "source-vector.json"
+    target_map = tmp_path / "target-vector.json"
+    source_map.write_text(json.dumps({
+        "pages": [{"page": 1, "systems": [{"bbox": [20, 70, 280, 130], "staffSpacing": 4}]}]
+    }), encoding="utf-8")
+    # Deliberately simulate a projection detector that skipped the first staff.
+    target_map.write_text(json.dumps({
+        "pages": [{"page": 1, "systems": [{"bbox": [20, 120, 280, 180], "staffSpacing": 4}]}]
+    }), encoding="utf-8")
+
+    report = preserve_headers(source, target, source_map, target_map, output)
+    assert report["pages"][0]["targetNotationFittedBelowHeader"] is True
+    assert report["pages"][0]["targetBoundaryEvidence"] == "earliest-vector-staff"
+
+
 def test_musicxml_layout_keeps_all_nonempty_credits(api):
     import xml.etree.ElementTree as ET
 

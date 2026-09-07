@@ -31,6 +31,39 @@ def read_first_systems(path):
     return result
 
 
+def first_vector_staff_safe_top(page):
+    """Return the half-space above the earliest vector five-line staff.
+
+    Structure projection can miss a sparse first system when title text or a
+    multi-measure rest dominates the same band.  Re-engraved MuseScore PDFs
+    still expose their staff rules as five evenly spaced horizontal vectors.
+    """
+    minimum_length = page.rect.width * 0.20
+    candidates = []
+    for drawing in page.get_drawings():
+        for item in drawing.get("items", []):
+            if not item or item[0] != "l":
+                continue
+            start, end = item[1], item[2]
+            if abs(start.y - end.y) <= 0.35 and abs(start.x - end.x) >= minimum_length:
+                candidates.append((start.y + end.y) / 2.0)
+    rows = []
+    for value in sorted(candidates):
+        if not rows or value - rows[-1][-1] > 0.45:
+            rows.append([value])
+        else:
+            rows[-1].append(value)
+    ordinates = [sum(group) / len(group) for group in rows]
+    for index in range(max(0, len(ordinates) - 4)):
+        group = ordinates[index:index + 5]
+        gaps = [group[offset + 1] - group[offset] for offset in range(4)]
+        spacing = sum(gaps) / 4.0
+        if (1.25 <= spacing <= 12.0
+                and max(abs(value - spacing) for value in gaps) <= max(0.5, spacing * 0.15)):
+            return max(0.0, group[0] - spacing / 2.0)
+    return None
+
+
 def preserve_headers(source_pdf, target_pdf, source_structures, target_structures, output_pdf):
     """Copy the safe band above the first staff from source into target pages.
 
@@ -76,6 +109,11 @@ def preserve_headers(source_pdf, target_pdf, source_structures, target_structure
         target_top = min(
             float(target_bbox[1]) + (4.5 * target_spacing if target_spacing else 0),
             target_rect.height)
+        vector_target_top = first_vector_staff_safe_top(target_page)
+        target_boundary_evidence = "structure"
+        if vector_target_top is not None and vector_target_top < target_top:
+            target_top = vector_target_top
+            target_boundary_evidence = "earliest-vector-staff"
         reflowed = (
             source_bottom > target_top + 2
             and source_bottom < source_rect.height - 18
@@ -109,6 +147,7 @@ def preserve_headers(source_pdf, target_pdf, source_structures, target_structure
             "status": "preserved",
             "bbox": [round(value, 4) for value in destination],
             "targetNotationFittedBelowHeader": reflowed,
+            "targetBoundaryEvidence": target_boundary_evidence,
         })
 
     output_path = Path(output_pdf)
