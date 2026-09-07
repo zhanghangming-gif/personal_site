@@ -24,7 +24,10 @@ def read_first_systems(path):
             continue
         bbox = systems[0].get("bbox")
         if isinstance(bbox, list) and len(bbox) == 4:
-            result[int(page.get("page"))] = [float(item) for item in bbox]
+            result[int(page.get("page"))] = {
+                "bbox": [float(item) for item in bbox],
+                "staffSpacing": float(systems[0].get("staffSpacing") or 0),
+            }
     return result
 
 
@@ -60,8 +63,19 @@ def preserve_headers(source_pdf, target_pdf, source_structures, target_structure
             page.show_pdf_page(page.rect, target, index - 1, keep_proportion=False)
             pages.append({"page": index, "status": "skipped", "reason": "缺少首个谱表坐标"})
             continue
-        source_bottom = min(float(source_box[1]), source_rect.height)
-        target_top = min(float(target_box[1]), target_rect.height)
+        source_bbox, target_bbox = source_box["bbox"], target_box["bbox"]
+        source_spacing = source_box.get("staffSpacing") or 0
+        target_spacing = target_box.get("staffSpacing") or 0
+        # Raster structure boxes extend five staff spaces above the first line.
+        # Copy through the half-space above that line so tempo and title text
+        # come from the source, while the target crop starts at the equivalent
+        # point and does not duplicate those first-system directions.
+        source_bottom = min(
+            float(source_bbox[1]) + (4.5 * source_spacing if source_spacing else 0),
+            source_rect.height)
+        target_top = min(
+            float(target_bbox[1]) + (4.5 * target_spacing if target_spacing else 0),
+            target_rect.height)
         reflowed = (
             source_bottom > target_top + 2
             and source_bottom < source_rect.height - 18
