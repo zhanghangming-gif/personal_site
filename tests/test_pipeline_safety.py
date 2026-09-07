@@ -1,5 +1,6 @@
 import json
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,28 @@ def test_export_retry_can_isolate_alternative_candidate(api, monkeypatch, tmp_pa
         'omr-alternative-export-retry', 'alternate retry')
     assert Path(result).parent.name == 'omr-alternative-export-retry'
     assert removed == 1
+
+
+def test_audiveris_sanitizer_removes_only_malformed_grace_relations(api, tmp_path):
+    source = tmp_path / 'source.omr'
+    target = tmp_path / 'sanitized.omr'
+    sheet = b'''<sheet><sig><inters>
+      <head-chord id="1"/><small-chord id="2"/><small-chord id="3"/>
+    </inters><relations>
+      <relation source="1" target="2"><chord-grace/></relation>
+      <relation source="2" target="3"><chord-grace/></relation>
+      <relation source="1" target="3"><beam-stem/></relation>
+    </relations></sig></sheet>'''
+    with zipfile.ZipFile(source, 'w') as archive:
+        archive.writestr('sheet#1/sheet#1.xml', sheet)
+        archive.writestr('book.xml', b'<book/>')
+
+    assert api.sanitize_audiveris_book(str(source), str(target)) == 1
+    with zipfile.ZipFile(target) as archive:
+        root = ET.fromstring(archive.read('sheet#1/sheet#1.xml'))
+    relations = list(root.find('./sig/relations'))
+    assert [(item.attrib['source'], item.attrib['target']) for item in relations] == [
+        ('1', '2'), ('1', '3')]
 
 
 def test_repair_failure_continues_original_as_unverified_candidate(api, monkeypatch, tmpdir):

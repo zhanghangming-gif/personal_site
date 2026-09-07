@@ -1392,7 +1392,12 @@ def recover_rest_counts_from_unresolved_gaps(path, omr_analysis, unresolved_gaps
 
 
 def sanitize_audiveris_book(source_path, output_path):
-    """Remove malformed wedge relations that can make Audiveris skip whole measures on export."""
+    """Remove malformed relations that make Audiveris skip whole measures on export.
+
+    A ChordGraceRelation is only valid between a normal chord and a small chord.
+    Some dense scores produce small-to-small or normal-to-normal relations; Audiveris
+    then raises ClassCastException while exporting and silently omits the measure.
+    """
     removed = 0
     with zipfile.ZipFile(source_path) as source, zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as target:
         for info in source.infolist():
@@ -1407,6 +1412,28 @@ def sanitize_audiveris_book(source_path, output_path):
                         )
                         if name == "wedge" or has_wedge_relation:
                             parent.remove(node)
+                            removed += 1
+                for sig in (node for node in root.iter() if local_name(node.tag) == "sig"):
+                    inters = next((node for node in list(sig) if local_name(node.tag) == "inters"), None)
+                    relations = next((node for node in list(sig) if local_name(node.tag) == "relations"), None)
+                    if inters is None or relations is None:
+                        continue
+                    inter_types = {
+                        node.attrib.get("id"): local_name(node.tag)
+                        for node in list(inters) if node.attrib.get("id")
+                    }
+                    for relation in list(relations):
+                        has_grace_relation = any(
+                            local_name(node.tag) == "chord-grace" for node in relation.iter()
+                        )
+                        if not has_grace_relation:
+                            continue
+                        endpoint_types = {
+                            inter_types.get(relation.attrib.get("source")),
+                            inter_types.get(relation.attrib.get("target")),
+                        }
+                        if endpoint_types != {"head-chord", "small-chord"}:
+                            relations.remove(relation)
                             removed += 1
                 payload = b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="utf-8")
             target.writestr(info, payload)
@@ -3205,9 +3232,9 @@ def retry_audiveris_export(audiveris, omr_book, job_dir, timeout,
     retry_dir = os.path.join(job_dir, directory_name)
     os.makedirs(retry_dir, exist_ok=True)
     sanitized_book = os.path.join(retry_dir, "sanitized.omr")
-    removed_wedges = sanitize_audiveris_book(omr_book, sanitized_book)
-    if removed_wedges <= 0:
-        raise RuntimeError("Audiveris 跳过了含音符小节，且没有找到可自动修复的渐强线关系")
+    removed_relations = sanitize_audiveris_book(omr_book, sanitized_book)
+    if removed_relations <= 0:
+        raise RuntimeError("Audiveris 跳过了含音符小节，且没有找到可安全清理的异常关系")
     output = run_command(
         list(audiveris) + ["-batch", "-export", "-output", retry_dir, sanitized_book],
         job_dir,
@@ -3218,7 +3245,7 @@ def retry_audiveris_export(audiveris, omr_book, job_dir, timeout,
     musicxml = newest_musicxml_file(retry_dir)
     if not musicxml or analysis.get("exportErrors"):
         raise RuntimeError("Audiveris 二次导出仍跳过含音符小节，已阻止生成不完整乐谱")
-    return musicxml, removed_wedges, analysis
+    return musicxml, removed_relations, analysis
 
 
 def get_pdf_page_count(path):
