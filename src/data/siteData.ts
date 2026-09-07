@@ -622,7 +622,7 @@ export const honors: Honor[] = [
       '作为重庆大学仿生足式机器人挑战赛 1 队成员参加第25届全国大学生机器人大赛 ROBOCON，在障碍赛中获得一等奖。',
     year: '2026',
     category: '机器人竞赛',
-    image: '/honors/robocon-2026-obstacle-first.webp',
+    image: '/honors/robocon-2026-obstacle-first-v2.webp',
   },
   {
     title: '第25届全国大学生机器人大赛 ROBOCON 仿生足式机器人挑战赛',
@@ -631,7 +631,7 @@ export const honors: Honor[] = [
       '作为重庆大学仿生足式机器人挑战赛 1 队成员参加第25届全国大学生机器人大赛 ROBOCON，在任务赛中获得三等奖。',
     year: '2026',
     category: '机器人竞赛',
-    image: '/honors/robocon-2026-mission-third.webp',
+    image: '/honors/robocon-2026-mission-third-v2.webp',
   },
   {
     title: '美国大学生数学建模竞赛（MCM）',
