@@ -8,7 +8,7 @@ remaining disagreement so later verification can keep those claims separate.
 
 RISK_DIMENSIONS = (
     'emptyScore', 'exportErrors', 'pdfMeasureConflicts', 'bookStructureIssue',
-    'unresolvedMultirests',
+    'timelineOverflows', 'timelineGaps', 'unresolvedMultirests',
 )
 
 
@@ -19,8 +19,10 @@ def recognition_families(preflight):
 
 def recognition_risk(analysis, xml_notes):
     conflicts = analysis.get('pdfSourceAudit', {}).get('measureConflicts', [])
+    timeline = analysis.get('timelineRisk') or {}
     return (int(xml_notes == 0), len(analysis.get('exportErrors', [])), len(conflicts),
-            int(bool(analysis.get('bookIssue'))), len(analysis.get('multirestMissing', [])))
+            int(bool(analysis.get('bookIssue'))), int(timeline.get('overflowCount') or 0),
+            int(timeline.get('gapCount') or 0), len(analysis.get('multirestMissing', [])))
 
 
 def needs_alternative(analysis, xml_notes):
@@ -44,6 +46,9 @@ def recognition_attempt(attempt_id, family, analysis, xml_notes, source_artifact
             'recognizedLineNumbers': list(analysis.get('recognizedLineNumbers') or []),
             'exportErrors': len(analysis.get('exportErrors') or []),
             'measureConflicts': len((analysis.get('pdfSourceAudit') or {}).get('measureConflicts') or []),
+            'timelineAnalyzedMeasures': int((analysis.get('timelineRisk') or {}).get('analyzedMeasures') or 0),
+            'timelineGaps': int((analysis.get('timelineRisk') or {}).get('gapCount') or 0),
+            'timelineOverflows': int((analysis.get('timelineRisk') or {}).get('overflowCount') or 0),
             'unresolvedMultirests': len(analysis.get('multirestMissing') or []),
         },
         'risk': {name: risk[index] for index, name in enumerate(RISK_DIMENSIONS)},
@@ -73,7 +78,8 @@ def recognition_decision(attempts):
         if item['selected']:
             continue
         metrics = item.get('metrics') or {}
-        for field in ('noteEvents', 'systems', 'recognizedLineNumbers', 'unresolvedMultirests'):
+        for field in ('noteEvents', 'systems', 'recognizedLineNumbers', 'timelineGaps',
+                      'timelineOverflows', 'unresolvedMultirests'):
             if metrics.get(field) != selected_metrics.get(field):
                 disagreements.append({
                     'attemptId': item.get('attemptId'), 'field': field,

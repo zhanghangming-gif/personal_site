@@ -54,6 +54,8 @@ from score_transposition import transpose_tree, pitch_number
 from score_render_audit import compare_rendered_score, exported_layout
 from score_source_audit import apply_pdf_anchors
 from score_review import write_score_review, attach_review
+from score_ir import score_ir
+from score_rhythm_gaps import detect_rhythm_gaps
 from score_editor import (candidate_info, editor_data, apply_edits, report_text,
                           regular_file, carry_rest_review)
 from score_omr_options import (
@@ -616,6 +618,136 @@ def integer_ocr_consensus(values, minimum_votes=2):
     return (winner, True) if votes >= minimum_votes and not tied else (None, False)
 
 
+def musicxml_timeline_risk(path):
+    """Measure OMR completeness before choosing a recognition candidate.
+
+    This is deliberately a detector, not a repair step. A timeline gap may be
+    caused by a missed rest, note, tuplet or voice, so the result only triggers
+    another recognition representation and keeps the candidate in review.
+    """
+    try:
+        report = detect_rhythm_gaps(score_ir(read_musicxml_root(path), "omr-candidate"))
+    except (OSError, ValueError, TypeError, KeyError, ET.ParseError) as exc:
+        return {
+            "status": "unavailable", "analyzedMeasures": 0,
+            "gapCount": 0, "overflowCount": 0, "error": str(exc),
+        }
+    summary = report.get("summary") or {}
+    return {
+        "status": report.get("status"),
+        "analyzedMeasures": int(summary.get("analyzedMeasures") or 0),
+        "gapCount": int(summary.get("gapCount") or 0),
+        "overflowCount": int(summary.get("overflowCount") or 0),
+        "truncated": bool(summary.get("truncated")),
+    }
+
+
+def detect_multirest_visual_bar(image, left, right, staff_lines):
+    """Find a flat multi-rest bar or an old-style rectangular rest group.
+
+    The decision is deliberately geometric and scale-relative. Staff lines
+    are ignored, and a candidate must keep nearly identical horizontal ends
+    for several rows. Sloping beams therefore do not become evidence merely
+    because they are thick. Musical-content checks and line-number arithmetic
+    still decide whether the evidence may change MusicXML.
+    """
+    if image is None or right - left < 18 or len(staff_lines or []) < 2:
+        return False
+    lines = sorted(set(int(round(value)) for value in staff_lines))[:5]
+    gaps = [b - a for a, b in zip(lines, lines[1:]) if b > a]
+    if not gaps:
+        return False
+    spacing = sorted(gaps)[len(gaps) // 2]
+    left = max(0, int(left))
+    right = min(image.size[0], int(right))
+    top = max(0, int(lines[0] - spacing * 0.25))
+    bottom = min(image.size[1], int(lines[-1] + spacing * 0.25) + 1)
+    minimum_run = max(12, int(spacing * 0.8))
+    maximum_run = max(minimum_run, right - left - max(4, int(spacing * 0.45)))
+    edge_margin = max(2, int(spacing * 0.12))
+    def interior_stems(run, row_top, row_bottom):
+        """Count note stems crossing a thick horizontal candidate.
+
+        A multi-rest H bar has posts at its two ends. Beams have several note
+        stems attached inside the beam. End posts are excluded by a
+        staff-relative margin so the two shapes are not confused.
+        """
+        run_left, run_right = run
+        margin = max(4, int(spacing * 0.50))
+        scan_left, scan_right = run_left + margin, run_right - margin
+        if scan_right <= scan_left:
+            return 0
+        required = max(6, int(spacing * 0.65))
+        columns = []
+        for x in range(scan_left, scan_right + 1):
+            longest = current = 0
+            for yy in range(top, bottom):
+                if row_top <= yy <= row_bottom:
+                    continue
+                if image.getpixel((x, yy)) < 128:
+                    current += 1
+                    longest = max(longest, current)
+                else:
+                    current = 0
+            if longest >= required:
+                columns.append(x)
+        groups = 0
+        previous = None
+        for x in columns:
+            if previous is None or x > previous + 1:
+                groups += 1
+            previous = x
+        return groups
+
+    anchor = None
+    consecutive = 0
+    candidate_top = None
+    for y in range(top, bottom):
+        if any(abs(y - line) <= 2 for line in lines):
+            continue
+        runs = []
+        start = None
+        for x in range(left, right):
+            black = image.getpixel((x, y)) < 128
+            if black and start is None:
+                start = x
+            elif not black and start is not None:
+                runs.append((start, x - 1))
+                start = None
+        if start is not None:
+            runs.append((start, right - 1))
+        runs = [
+            run for run in runs
+            if minimum_run <= run[1] - run[0] + 1 <= maximum_run
+            and run[0] - left >= edge_margin and right - 1 - run[1] >= edge_margin
+        ]
+        current = max(runs, key=lambda run: run[1] - run[0], default=None)
+        if current is not None and anchor is not None and current == anchor:
+            consecutive += 1
+        elif current is not None:
+            consecutive = 1
+            anchor = current
+            candidate_top = y
+        else:
+            consecutive = 0
+            anchor = None
+            candidate_top = None
+        if consecutive >= 5:
+            candidate_bottom = y
+            center_y = (candidate_top + candidate_bottom) / 2.0
+            middle_line = lines[len(lines) // 2]
+            # Multi-measure rest bars are centered on the staff. A flat beam
+            # can satisfy the same run test, but normally sits near an outer
+            # staff line and connects to note stems.
+            centered = abs(center_y - middle_line) <= spacing
+            if centered and interior_stems(anchor, candidate_top, candidate_bottom) == 0:
+                return True
+            consecutive = 0
+            anchor = None
+            candidate_top = None
+    return False
+
+
 def analyze_audiveris_output(output):
     text = output or ""
     multirests = re.findall(r"Measure\{#([^}]+)\}\s+Multirest with no measure count", text)
@@ -696,43 +828,6 @@ def analyze_audiveris_book(path):
             return None
         return value if 0 < value <= maximum else None
 
-    def stack_has_multirest_bar(image, left, right, staff_top):
-        """Detect the thick horizontal bar used by a multi-measure rest.
-
-        Staff lines are long but only one or two pixels thick. Note beams are
-        thicker, but normally much shorter. This detector only supplies visual
-        evidence; a repair still needs a printed count and line-start arithmetic.
-        """
-        if image is None or not staff_top or right - left < 45:
-            return False
-        left = max(0, int(left))
-        right = min(image.size[0], int(right))
-        top = max(0, int(staff_top - 4))
-        bottom = min(image.size[1], int(staff_top + 105))
-        width = right - left
-        if width < 45 or bottom <= top:
-            return False
-        minimum_run = max(48, int(width * 0.14))
-        maximum_run = int(width * 0.82)
-        consecutive = 0
-        for y in range(top, bottom):
-            longest = 0
-            current = 0
-            for x in range(left, right):
-                if image.getpixel((x, y)) < 128:
-                    current += 1
-                    if current > longest:
-                        longest = current
-                else:
-                    current = 0
-            if minimum_run <= longest <= maximum_run:
-                consecutive += 1
-                if consecutive >= 5:
-                    return True
-            else:
-                consecutive = 0
-        return False
-
     def increasing_indexes(page_systems):
         candidates = [
             (index, item.get("lineStartRaw"))
@@ -800,6 +895,9 @@ def analyze_audiveris_book(path):
                 staff_top = min(
                     (int(float(point.attrib["y"])) for point in staff_points), default=0
                 )
+                staff_lines = sorted(set(
+                    int(round(float(point.attrib["y"]))) for point in staff_points
+                ))[:5]
                 line_limit = staff_left + max(48, int(page_width * 0.025))
                 for word in system.iter():
                     if local_name(word.tag) != "word":
@@ -862,8 +960,8 @@ def analyze_audiveris_book(path):
                         "width": max(0, right - left),
                         "duration": stack.attrib.get("duration", ""),
                         "special": stack.attrib.get("special", ""),
-                        "multirestBar": stack_has_multirest_bar(
-                            page_image, left, right, staff_top),
+                        "multirestBar": detect_multirest_visual_bar(
+                            page_image, left, right, staff_lines),
                     })
                 page_systems.append({
                     "page": page_index,
@@ -909,10 +1007,32 @@ def analyze_audiveris_book(path):
                 rest_counts = []
                 stacks = item.get("stacks") or []
                 markers = item.get("numberMarkers") or []
+                def near_staff_marker(marker):
+                    return (
+                        type(marker.get("value")) is int
+                        and 1 < marker.get("value") <= 64
+                        and (
+                            marker.get("kind") == "measure-count"
+                            or 0 <= item.get("staffTop", 0) - (
+                                marker.get("y", 0) + marker.get("height", 0)
+                            ) <= 60
+                        )
+                    )
                 candidate_indexes = [
                     index for index, stack in enumerate(stacks)
                     if stack.get("special") == "MULTI_REST"
-                    or stack.get("multirestBar")
+                    or (
+                        (
+                            stack.get("multirestBar")
+                            or str(stack.get("duration", "")).strip() in ("0", "0/1")
+                        )
+                        and any(
+                            stack.get("left", 0) - 8 <= marker.get("x", -1)
+                            <= stack.get("right", 0) + 8
+                            and near_staff_marker(marker)
+                            for marker in markers
+                        )
+                    )
                 ]
                 for stack_index in candidate_indexes:
                     stack = stacks[stack_index]
@@ -920,10 +1040,11 @@ def analyze_audiveris_book(path):
                         candidate for candidate in markers
                         if stack.get("left", 0) - 8 <= candidate.get("x", -1)
                         <= stack.get("right", 0) + 8
+                        and near_staff_marker(candidate)
                     ), None)
                     raw_value = marker.get("value") if marker else None
                     ocr_values = []
-                    if page_image is not None:
+                    if page_image is not None and raw_value is None:
                         if marker:
                             x = marker.get("x", 0)
                             y = marker.get("y", 0)
@@ -970,9 +1091,11 @@ def analyze_audiveris_book(path):
                             "ocrValue": ocr_value,
                             "ocrCandidates": ocr_values,
                             "ocrConsensus": ocr_consensus,
-                            "geometry": ("audiveris-multirest"
-                                         if stack.get("special") == "MULTI_REST"
-                                         else "raster-multirest-bar"),
+                            "geometry": (
+                                "audiveris-multirest" if stack.get("special") == "MULTI_REST" else
+                                "raster-multirest-bar" if stack.get("multirestBar") else
+                                "printed-count-on-zero-duration-stack"
+                            ),
                         })
                 item["restCounts"] = rest_counts
             systems.extend(page_systems)
@@ -1075,6 +1198,103 @@ def analyze_audiveris_book(path):
         "footerLyrics": sorted(set(footer_lyrics)),
         "bookIssue": issue,
     }
+
+
+def recover_rest_counts_from_unresolved_gaps(path, omr_analysis, unresolved_gaps):
+    """Run bounded OCR only on systems whose measure arithmetic did not close.
+
+    Audiveris sometimes preserves an old-style multi-rest glyph and its stack
+    while omitting the printed count from the project XML. Scanning every stack
+    on every page is both slow and noisy, so this second pass is restricted to
+    independently detected structural gaps. A count is only returned after a
+    unique multi-pass OCR consensus; the repair layer still requires a rest-only
+    MusicXML measure and compatible line-start arithmetic before applying it.
+    """
+    tesseract = shutil.which("tesseract")
+    if not path or not zipfile.is_zipfile(path) or not tesseract:
+        return []
+    try:
+        from PIL import Image
+    except ImportError:
+        return []
+    targets = {
+        (item.get("page"), item.get("system"))
+        for item in (unresolved_gaps or [])
+        if item.get("page") is not None and item.get("system") is not None
+    }
+    systems = {
+        (item.get("page"), item.get("system")): item
+        for item in (omr_analysis.get("systems") or [])
+    }
+    recovered = []
+    with zipfile.ZipFile(path) as archive:
+        images = {}
+        for key in sorted(targets):
+            system = systems.get(key)
+            if not system:
+                continue
+            page, _ = key
+            binary_name = "sheet#%s/BINARY.png" % page
+            if binary_name not in archive.namelist():
+                continue
+            if page not in images:
+                try:
+                    images[page] = Image.open(io.BytesIO(archive.read(binary_name))).convert("L")
+                except (OSError, ValueError):
+                    images[page] = None
+            image = images[page]
+            staff_top = int(system.get("staffTop") or 0)
+            if image is None or not staff_top:
+                continue
+            existing = {
+                (item.get("stackIndex"), item.get("value"))
+                for item in (system.get("restCounts") or [])
+            }
+            for stack_index, stack in enumerate(system.get("stacks") or []):
+                if stack.get("special") == "CAUTIONARY":
+                    continue
+                left = max(0, int(stack.get("left", 0)) - 8)
+                right = min(image.size[0], int(stack.get("right", left)) + 8)
+                top = max(0, staff_top - 110)
+                bottom = min(image.size[1], staff_top - 4)
+                if right - left < 12 or bottom <= top:
+                    continue
+                crop = image.crop((left, top, right, bottom))
+                crop = crop.resize((max(1, crop.size[0] * 5), max(1, crop.size[1] * 5)))
+                payload = io.BytesIO()
+                crop.save(payload, format="PNG")
+                values = []
+                for psm in ("6", "7", "10"):
+                    try:
+                        completed = subprocess.run(
+                            [tesseract, "stdin", "stdout", "--psm", psm, "--dpi", "300",
+                             "-c", "tessedit_char_whitelist=0123456789"],
+                            input=payload.getvalue(), stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, timeout=4,
+                        )
+                    except (OSError, subprocess.SubprocessError):
+                        continue
+                    matches = re.findall(r"\d+", completed.stdout.decode("utf-8", "ignore"))
+                    if len(matches) == 1:
+                        value = int(matches[0])
+                        if 1 < value <= 64:
+                            values.append(value)
+                value, consensus = integer_ocr_consensus(values)
+                if not consensus or (stack_index, value) in existing:
+                    continue
+                detection = {
+                    "stackIndex": stack_index,
+                    "value": value,
+                    "rawValue": None,
+                    "ocrValue": value,
+                    "ocrCandidates": values,
+                    "ocrConsensus": True,
+                    "geometry": "targeted-rhythm-gap-ocr",
+                }
+                system.setdefault("restCounts", []).append(detection)
+                existing.add((stack_index, value))
+                recovered.append(dict(detection, page=page, system=key[1]))
+    return recovered
 
 
 def sanitize_audiveris_book(source_path, output_path):
@@ -1659,10 +1879,10 @@ def likely_merged_multirest_indexes(omr_system):
 def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unresolved_report=None):
     """Commit only uniquely constrained printed multirest counts.
 
-    This fallback starts from the untouched OMR export. It deliberately ignores
-    OCR-only counts and any system without two reliable line-start anchors.
-    Therefore an ambiguous gap elsewhere cannot roll back a proven rest, while
-    it also cannot cause a guessed rest to enter the candidate score.
+    This fallback starts from the untouched OMR export. OCR-only counts are
+    accepted only when bounded gap OCR, rest geometry, two independent line
+    anchors and a unique structure equation all agree. Therefore an ambiguous
+    gap elsewhere cannot roll back a proven rest or introduce a guessed rest.
     """
     root = read_musicxml_root(input_path)
     namespace = namespace_of(root.tag)
@@ -1781,7 +2001,8 @@ def apply_verified_multirest_repairs(input_path, output_path, omr_analysis, unre
                 continue
             stack = stacks[position]
             if (stack.get("special") == "MULTI_REST"
-                    or detection.get("geometry") != "raster-multirest-bar"
+                    or detection.get("geometry") not in (
+                        "raster-multirest-bar", "targeted-rhythm-gap-ocr")
                     or not stack.get("multirestBar")):
                 continue
             raw_confirmed = detection.get("rawValue") == value
@@ -3138,6 +3359,65 @@ def scale_pdf_to_page(input_path, output_path, target_width, target_height):
         writer.write(output_file)
 
 
+def add_multirest_render_boundaries(input_path, output_path, omr_analysis):
+    """Annotate expanded rest runs so MuseScore cannot merge across them.
+
+    The repair layer expands a confirmed multi-rest into ordinary measures for
+    stable numbering and editing. MusicXML's multiple-rest marker is restored
+    only in the renderer input; MuseScore uses it to place break boundaries at
+    both ends of the run. MuseScore 3 interprets the MusicXML value as the end
+    boundary after the containing measure, so the importer value is one larger
+    than the number of measures that must remain grouped.
+    """
+    repair = (omr_analysis or {}).get("multirestRepair") or {}
+    boundaries = repair.get("expandedForRendering") or []
+    if not boundaries:
+        return input_path, []
+    root = read_musicxml_root(input_path)
+    applied = []
+    for boundary in boundaries:
+        number = str(boundary.get("measure", ""))
+        count = boundary.get("multipleRest")
+        if type(count) is not int or count < 2 or not number:
+            continue
+        matched = 0
+        for part in (item for item in root if local_name(item.tag) == "part"):
+            measure = next((
+                item for item in part if local_name(item.tag) == "measure"
+                and item.attrib.get("number") == number
+            ), None)
+            if measure is None:
+                continue
+            attributes = next((
+                item for item in measure if local_name(item.tag) == "attributes"
+            ), None)
+            if attributes is None:
+                attributes = ET.Element(qname(measure, "attributes"))
+                measure.insert(0, attributes)
+            style = next((
+                item for item in attributes if local_name(item.tag) == "measure-style"
+            ), None)
+            if style is None:
+                style = ET.SubElement(attributes, qname(attributes, "measure-style"))
+            multiple = next((
+                item for item in style if local_name(item.tag) == "multiple-rest"
+            ), None)
+            if multiple is None:
+                multiple = ET.SubElement(style, qname(style, "multiple-rest"))
+            importer_count = count + 1
+            multiple.text = str(importer_count)
+            matched += 1
+        if matched:
+            applied.append({
+                "measure": number, "multipleRest": count,
+                "museScoreImporterBoundary": importer_count, "parts": matched,
+            })
+    if not applied:
+        return input_path, []
+    ET.ElementTree(root).write(output_path, encoding="utf-8", xml_declaration=True)
+    return output_path, applied
+
+
 def render_preserved_score_pdf(
     musescore, musicxml_path, output_pdf, source_pdf, job_dir, timeout, label, omr_analysis=None
 ):
@@ -3147,8 +3427,11 @@ def render_preserved_score_pdf(
     source_pages = get_pdf_page_count(source_pdf)
     expected_systems = expected_system_counts(omr_analysis)
     expected_staffs = expected_staff_counts(omr_analysis)
+    render_input, render_boundaries = add_multirest_render_boundaries(
+        musicxml_path, os.path.join(job_dir, "render-input.musicxml"), omr_analysis
+    )
     base_mscx = os.path.join(job_dir, "layout-base.mscx")
-    run_command(list(musescore) + ["-f", "-o", base_mscx, musicxml_path], job_dir, timeout, label + "（导入）")
+    run_command(list(musescore) + ["-f", "-o", base_mscx, render_input], job_dir, timeout, label + "（导入）")
     source_spatium = musescore_style_number(base_mscx, "Spatium", 1.60)
     best = None
     probes = []
@@ -3195,6 +3478,10 @@ def render_preserved_score_pdf(
     run_command(list(musescore) + ["-f", "-o", audit_path, best["path"]], job_dir, timeout, label + "（回读核对）")
     rendered_root = read_musicxml_root(audit_path)
     actual_layout = exported_layout(rendered_root)
+    if render_boundaries:
+        remove_multiple_rest_nodes(rendered_root)
+        ET.ElementTree(rendered_root).write(
+            audit_path, encoding="utf-8", xml_declaration=True)
     return output_pages, {
         "sourceSpatium": round(source_spatium, 3),
         "outputSpatium": best["spatium"],
@@ -3206,6 +3493,7 @@ def render_preserved_score_pdf(
         "systemCountValidated": actual_layout["breaksDeclared"] and len(actual_layout["systemsPerPage"]) == output_pages,
         "renderAudit": compare_rendered_score(read_musicxml_root(musicxml_path), rendered_root),
         "renderedMusicxml": audit_path,
+        "multirestRenderBoundaries": render_boundaries,
         "matched": best["matched"],
         "layoutProbes": probes,
     }
@@ -3418,6 +3706,7 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
     if preflight:
         apply_pdf_anchors(omr_analysis, preflight)
 
+    omr_analysis["timelineRisk"] = musicxml_timeline_risk(musicxml)
     initial_notes = len(score_signature(musicxml)["noteEvents"])
     attempt_signatures = [{"attemptId": "audiveris-primary", "signature": score_signature(musicxml)}]
     attempts = [recognition_attempt(
@@ -3425,7 +3714,24 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
         os.path.relpath(input_pdf, job_dir).replace("\\", "/"),
     )]
     families = recognition_families(preflight)
-    alternate_family = (family or families[0]) if omr_variant else (families[1] if len(families) > 1 else None)
+    alternate_reason = None
+    timeline_risk = omr_analysis.get("timelineRisk") or {}
+    timeline_total = int(timeline_risk.get("gapCount") or 0) + int(
+        timeline_risk.get("overflowCount") or 0)
+    if timeline_total:
+        alternate_reason = "musicxml_timeline_gaps"
+    if not omr_variant and timeline_total:
+        # A vector PDF can still contain a music font or drawing construction
+        # that the OMR importer handles poorly. A high-resolution raster is an
+        # independent representation of the same page and often exposes note
+        # heads/stems that disappeared during direct PDF ingestion.
+        try:
+            omr_variant, variant_report = prepare_omr_variant(input_pdf, job_dir, 400)
+            alternate_reason = "timeline_gaps_high_resolution_raster"
+        except RuntimeError:
+            omr_variant = None
+    alternate_family = (family or families[0]) if omr_variant else (
+        families[1] if len(families) > 1 else None)
     alternate_input = omr_variant or input_pdf
     if alternate_family and needs_alternative(omr_analysis, initial_notes):
         progress("recognizing", "发现识谱疑点，正在用另一组输入与参数重新识别", 42)
@@ -3446,6 +3752,7 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
                 alternate.update(analyze_audiveris_book(alternate_book))
                 if preflight:
                     apply_pdf_anchors(alternate, preflight)
+                alternate["timelineRisk"] = musicxml_timeline_risk(alternate_xml)
                 notes = len(score_signature(alternate_xml)["noteEvents"])
                 risk = recognition_risk(alternate, notes)
                 attempts.append(recognition_attempt(
@@ -3453,6 +3760,7 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
                     os.path.relpath(alternate_input, job_dir).replace("\\", "/"),
                     "grayscale_autocontrast_raster_pdf" if omr_variant else "pdf",
                 ))
+                attempts[-1]["trigger"] = alternate_reason
                 attempt_signatures.append({"attemptId": "audiveris-alternative",
                                            "signature": score_signature(alternate_xml)})
                 if risk < recognition_risk(omr_analysis, initial_notes):
@@ -3514,6 +3822,22 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
         structure_repair = repair_musicxml_structure(
             musicxml, repaired_musicxml, omr_analysis
         )
+        targeted_counts = []
+        for _ in range(4):
+            if structure_repair.get("valid") or not structure_repair.get("unresolvedGaps"):
+                break
+            progress("recognizing", "正在放大结构缺口并复查多小节休止数字", 52)
+            recovered_counts = recover_rest_counts_from_unresolved_gaps(
+                omr_book, omr_analysis, structure_repair.get("unresolvedGaps")
+            )
+            if not recovered_counts:
+                break
+            targeted_counts.extend(recovered_counts)
+            structure_repair = repair_musicxml_structure(
+                musicxml, repaired_musicxml, omr_analysis
+            )
+        if targeted_counts:
+            structure_repair["targetedVisualRestCounts"] = targeted_counts
         if structure_repair.get("valid"):
             repair_state = "repair_success"
             omr_analysis["multirestMissingOriginal"] = omr_analysis.get("multirestMissing", [])

@@ -164,6 +164,38 @@ def test_candidate_export_agreement_does_not_prove_source_pdf(api, tmp_path):
     assert proof['passed'] is True
 
 
+def test_invalid_renderer_export_still_writes_review_for_candidate(api, tmp_path):
+    from score_review import write_score_review
+    (tmp_path / 'input.pdf').write_bytes(b'original pdf placeholder')
+    (tmp_path / 'output.pdf').write_bytes(b'candidate pdf placeholder')
+    ET.ElementTree(score(note())).write(tmp_path / 'source.xml')
+    ET.ElementTree(score(note('D'))).write(tmp_path / 'target.xml')
+    invalid = score(note('D'))
+    measure = next(item for item in invalid.iter() if item.tag == 'measure')
+    backup = ET.Element('backup')
+    ET.SubElement(backup, 'duration').text = '2'
+    measure.insert(1, backup)
+    ET.ElementTree(invalid).write(tmp_path / 'rendered.xml')
+    report = write_score_review(
+        str(tmp_path), str(tmp_path / 'input.pdf'), str(tmp_path / 'source.xml'),
+        str(tmp_path / 'target.xml'), str(tmp_path / 'rendered.xml'),
+        api.read_musicxml_root, 2, output_pdf=str(tmp_path / 'output.pdf'))
+    assert report['renderComparison']['passed'] is False
+    assert report['renderComparison']['issues'][0]['code'] == 'invalid_renderer_export'
+    assert (tmp_path / 'score-review.json').is_file()
+
+
+def test_oversized_trailing_backup_is_retained_as_warning(api):
+    from score_ir import score_ir
+    root = score(note())
+    measure = next(item for item in root.iter() if item.tag == 'measure')
+    backup = ET.SubElement(measure, 'backup')
+    ET.SubElement(backup, 'duration').text = '2'
+    indexed = score_ir(root)
+    assert indexed['counts']['notes'] == 1
+    assert indexed['warnings'][-1]['code'] == 'oversized_trailing_backup_ignored'
+
+
 def test_invalid_timing_stops_indexing(api):
     from score_ir import score_ir
     for root in (score(note(duration=0)), score('<backup><duration>1</duration></backup>' + note()),

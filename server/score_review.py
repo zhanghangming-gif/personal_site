@@ -169,14 +169,20 @@ def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml
     """This branch imports OMR/XML. No imported self-rating can verify the PDF."""
     spec = specification(semitones, preference, source_instrument, target_instrument)
     pdf_sha = file_digest(source_pdf)
-    indexes, artifacts = {}, {}
+    indexes, artifacts, index_errors = {}, {}, {}
     for role, path, origin in [('original', original_xml or source_xml, 'omr-export'),
                                ('source', source_xml, 'omr-after-structure-repair'),
                                ('expected', target_xml, 'deterministic-transposition'),
                                ('rendered', rendered_xml, 'renderer-export')]:
         if not path or not os.path.isfile(path):
             continue
-        index = score_ir(read_xml(path), origin, pdf_sha, file_digest(path))
+        try:
+            index = score_ir(read_xml(path), origin, pdf_sha, file_digest(path))
+        except (ValueError, TypeError, KeyError) as exc:
+            if role != 'rendered':
+                raise
+            index_errors[role] = str(exc)
+            continue
         if role in ('original', 'source', 'expected'):
             attach_measure_regions(index, omr_analysis or {}, preflight or {})
         if role == 'source':
@@ -203,10 +209,22 @@ def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml
     save_json(rhythm_gap_path, rhythm_gaps)
     rhythm_issues = rhythm_gap_issues(rhythm_gaps)
     transpose = compare_transposition(indexes['source'], indexes['expected'], semitones)
-    rendered = compare_ir(indexes['expected'], indexes['rendered']) if 'rendered' in indexes else {
-        'passed': False, 'issueCount': 1, 'issues': [{'id': 'render-unavailable', 'phase': 'render',
-            'code': 'missing_render_export', 'location': {}, 'message': '缺少最终排版的回读数据',
-            'expected': '最终排版数据', 'actual': '未取得'}]}
+    if 'rendered' in indexes:
+        rendered = compare_ir(indexes['expected'], indexes['rendered'])
+    else:
+        render_error = index_errors.get('rendered')
+        rendered = {
+            'passed': False, 'issueCount': 1, 'issues': [{
+                'id': 'render-unavailable', 'phase': 'render',
+                'code': 'invalid_renderer_export' if render_error else 'missing_render_export',
+                'location': {},
+                'message': ('排版器回读的 MusicXML 无法建立合法时间轴：' + render_error
+                            if render_error else '缺少最终排版的回读数据'),
+                'expected': '合法的最终排版数据',
+                'actual': render_error or '未取得',
+            }],
+            'truncated': False,
+        }
     issues = rhythm_issues + transpose['issues'] + rendered['issues']
     # Review scopes are positions in indexed XML, not invented PDF note boxes.
     grouped = {}

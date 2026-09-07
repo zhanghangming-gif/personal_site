@@ -82,7 +82,34 @@ def semantic_measures(root):
 
 
 def compare_rendered_score(expected, rendered):
-    left, right = semantic_measures(expected), semantic_measures(rendered)
+    try:
+        left, right = semantic_measures(expected), semantic_measures(rendered)
+    except (ValueError, TypeError, KeyError) as exc:
+        message = '排版器回读的 MusicXML 无法建立合法声部时间轴：%s' % exc
+        detailed = {
+            'passed': False,
+            'issueCount': 1,
+            'issues': [{
+                'id': 'render-1', 'phase': 'render',
+                'code': 'invalid_renderer_export', 'field': 'measure',
+                'expected': '合法的逐声部时间轴', 'actual': str(exc),
+                'message': message,
+            }],
+            'truncated': False, 'basis': 'musicxml_comparison',
+            'independentPdfVerification': False,
+        }
+        return {
+            'eventsMatch': False, 'marksMatch': False,
+            'differences': [message], 'semanticAudit': detailed,
+            'checks': [
+                {'id': 'rendered_events', 'label': 'PDF 排版后的音符与节奏',
+                 'passed': False, 'detail': message},
+                {'id': 'rendered_marks', 'label': 'PDF 排版后的演奏标记',
+                 'passed': False, 'detail': '排版器回读数据无效，演奏标记需要复核'},
+                {'id': 'rendered_semantics', 'label': '输出乐谱的逐音对应',
+                 'passed': False, 'detail': message},
+            ],
+        }
     events_ok = len(left) == len(right)
     marks_ok = events_ok
     examples = []
@@ -99,7 +126,27 @@ def compare_rendered_score(expected, rendered):
                 marks_ok = False
                 if len(examples) < 8:
                     examples.append('声部 %s，第 %s 小节：演奏标记发生变化' % (part_index, a[0] or index))
-    detailed = compare_ir(score_ir(expected, 'transposed-musicxml'), score_ir(rendered, 'renderer-export'))
+    try:
+        detailed = compare_ir(
+            score_ir(expected, 'transposed-musicxml'),
+            score_ir(rendered, 'renderer-export'),
+        )
+    except (ValueError, TypeError, KeyError) as exc:
+        message = '排版器回读的 MusicXML 无法建立合法声部时间轴：%s' % exc
+        events_ok = marks_ok = False
+        examples.append(message)
+        detailed = {
+            'passed': False,
+            'issueCount': 1,
+            'issues': [{
+                'id': 'render-1', 'phase': 'render',
+                'code': 'invalid_renderer_export', 'field': 'measure',
+                'expected': '合法的逐声部时间轴', 'actual': str(exc),
+                'message': message,
+            }],
+            'truncated': False, 'basis': 'musicxml_comparison',
+            'independentPdfVerification': False,
+        }
     return {'eventsMatch': events_ok, 'marksMatch': marks_ok, 'differences': examples,
             'semanticAudit': detailed,
             'checks': [

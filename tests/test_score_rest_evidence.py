@@ -1,5 +1,7 @@
 import zipfile
 
+from PIL import Image, ImageDraw
+
 
 def make_book(path, rests, relations=""):
     rows = []
@@ -98,3 +100,41 @@ def test_wrong_duration_or_staff_position_cannot_support_candidate(api, tmp_path
     assert result['status'] == 'visual_confirmation_required'
     assert result['candidates'][0]['durationMatchesGap'] is True
     assert result['candidates'][0]['staffPositionConsistent'] is False
+
+
+def test_flat_rest_bar_is_detected_without_treating_sloping_beam_as_same_shape(api):
+    staff_lines = [40, 58, 76, 94, 112]
+    image = Image.new('L', (320, 150), 255)
+    draw = ImageDraw.Draw(image)
+    for y in staff_lines:
+        draw.rectangle((20, y, 300, y + 1), fill=0)
+    draw.rectangle((90, 65, 225, 71), fill=0)
+    draw.rectangle((88, 58, 93, 78), fill=0)
+    draw.rectangle((223, 58, 228, 78), fill=0)
+    assert api.detect_multirest_visual_bar(image, 60, 255, staff_lines)
+
+    sloping = Image.new('L', (320, 150), 255)
+    draw = ImageDraw.Draw(sloping)
+    for y in staff_lines:
+        draw.rectangle((20, y, 300, y + 1), fill=0)
+    draw.polygon([(80, 62), (235, 82), (235, 88), (80, 68)], fill=0)
+    assert not api.detect_multirest_visual_bar(sloping, 60, 255, staff_lines)
+
+
+def test_printed_count_on_zero_duration_stack_is_kept_as_structure_evidence(api, tmp_path):
+    path = tmp_path / 'zero-duration-count.omr'
+    xml = '''<sheet><picture width="1000" height="1400"/><system>
+      <staff id="1" left="20" right="900"><line>
+        <point x="20" y="300"/><point x="20" y="318"/><point x="20" y="336"/>
+        <point x="20" y="354"/><point x="20" y="372"/>
+      </line></staff>
+      <stack id="1" left="200" right="400" duration="0" expected="1"/>
+      <word value="12"><bounds x="280" y="255" w="36" h="34"/></word>
+    </system></sheet>'''
+    with zipfile.ZipFile(path, 'w') as archive:
+        archive.writestr('sheet#1/sheet#1.xml', xml)
+    report = api.analyze_audiveris_book(str(path))
+    counts = report['systems'][0]['restCounts']
+    assert counts[0]['value'] == 12
+    assert counts[0]['stackIndex'] == 0
+    assert counts[0]['geometry'] == 'printed-count-on-zero-duration-stack'

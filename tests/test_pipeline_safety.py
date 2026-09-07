@@ -18,6 +18,28 @@ def write_minimal_musicxml(path):
     )
 
 
+def test_recognition_timeline_risk_triggers_alternative_and_candidate_ranking(api, tmp_path):
+    source = tmp_path / 'underfilled.musicxml'
+    source.write_text(
+        '''<score-partwise version="3.1">
+<part-list><score-part id="P1"><part-name>Test</part-name></score-part></part-list>
+<part id="P1"><measure number="1"><attributes><divisions>1</divisions>
+<time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+<note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><voice>1</voice></note>
+</measure></part></score-partwise>''', encoding='utf-8')
+    timeline = api.musicxml_timeline_risk(str(source))
+    assert timeline['gapCount'] == 1
+    assert timeline['overflowCount'] == 0
+    weak = api.recognition_attempt(
+        'weak', 'Bravura', {'timelineRisk': timeline}, 1)
+    complete = api.recognition_attempt(
+        'complete', 'Bravura', {'timelineRisk': {
+            'analyzedMeasures': 1, 'gapCount': 0, 'overflowCount': 0,
+        }}, 1)
+    assert api.needs_alternative({'timelineRisk': timeline}, 1)
+    assert api.recognition_decision([weak, complete])['selectedAttemptId'] == 'complete'
+
+
 def test_repair_failure_continues_original_as_unverified_candidate(api, monkeypatch, tmpdir):
     tmp_path = Path(str(tmpdir))
     input_pdf = tmp_path / "input.pdf"
@@ -382,7 +404,7 @@ def test_merged_multirests_are_inserted_without_deleting_following_notes(api, tm
              {'stackIndex': 0, 'value': 8, 'rawValue': 8, 'ocrValue': 8,
               'geometry': 'raster-multirest-bar', 'ocrConsensus': True},
              {'stackIndex': 5, 'value': 11, 'rawValue': None, 'ocrValue': 11,
-              'geometry': 'raster-multirest-bar', 'ocrConsensus': True},
+              'geometry': 'targeted-rhythm-gap-ocr', 'ocrConsensus': True},
          ]},
         {'page': 1, 'system': 2, 'lineStart': 25, 'lineStartRaw': 25,
          'stacks': [{'special': '', 'duration': '1'}], 'restCounts': []},
@@ -396,3 +418,28 @@ def test_merged_multirests_are_inserted_without_deleting_following_notes(api, tm
     assert signature['noteCount'] == source_notes
     assert signature['lineStartNumbers'] == ['1', '25']
     assert signature['measureCount'] == 25
+
+
+def test_expanded_multirest_gets_renderer_only_boundary_marker(api, tmp_path):
+    measures = [make_measure(index, attributes=index == 1) for index in range(1, 16)]
+    source = tmp_path / 'expanded.musicxml'
+    render_input = tmp_path / 'render-input.musicxml'
+    ET.ElementTree(make_score([measures])).write(source)
+    path, applied = api.add_multirest_render_boundaries(
+        str(source), str(render_input), {
+            'multirestRepair': {
+                'expandedForRendering': [{'measure': '2', 'multipleRest': 12}]
+            }
+        })
+    assert path == str(render_input)
+    assert applied == [{
+        'measure': '2', 'multipleRest': 12,
+        'museScoreImporterBoundary': 13, 'parts': 1,
+    }]
+    root = api.read_musicxml_root(str(render_input))
+    target = api.first_part_measures(root)[1]
+    assert next(
+        item.text for item in target.iter()
+        if api.local_name(item.tag) == 'multiple-rest'
+    ) == '13'
+    assert api.score_signature(str(source))['measureCount'] == 15

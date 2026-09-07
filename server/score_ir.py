@@ -84,7 +84,8 @@ def score_ir(root, origin='musicxml', document_sha256=None, artifact_sha256=None
                        'implicit': measure.get('implicit') == 'yes',
                        'nonControlling': measure.get('non-controlling') == 'yes'}
             position, previous = Fraction(0), None
-            for node in measure:
+            measure_nodes = list(measure)
+            for node_index, node in enumerate(measure_nodes):
                 kind = local(node.tag)
                 if kind == 'attributes':
                     divisions = Fraction(value(node, 'divisions', str(divisions)))
@@ -116,7 +117,18 @@ def score_ir(root, origin='musicxml', document_sha256=None, artifact_sha256=None
                     position += delta * (-1 if kind == 'backup' else 1)
                     previous = None
                     if position < 0:
-                        raise ValueError('第 %s 小节的声部时间轴越过小节起点' % location['measure'])
+                        remaining = measure_nodes[node_index + 1:]
+                        trailing_reset = kind == 'backup' and all(
+                            local(item.tag) in ('barline', 'print', 'sound', 'bookmark', 'link')
+                            for item in remaining)
+                        if not trailing_reset:
+                            raise ValueError('第 %s 小节的声部时间轴越过小节起点' % location['measure'])
+                        result['warnings'].append({
+                            'code': 'oversized_trailing_backup_ignored',
+                            'location': location,
+                            'detail': '小节末尾的 backup 超过已识别事件时值；事件已保留并标记复核',
+                        })
+                        position = Fraction(0)
                 elif kind == 'note':
                     grace, chord = child(node, 'grace') is not None, child(node, 'chord') is not None
                     duration = Fraction(value(node, 'duration', '0')) / divisions

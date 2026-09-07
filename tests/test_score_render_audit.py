@@ -48,3 +48,16 @@ def test_renderer_cannot_drop_slurs_or_tempo(api):
                   direction='<direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type></direction>')
     audit=compare_rendered_score(expected,tree(note()))
     assert not audit['eventsMatch'] and not audit['marksMatch']
+
+
+def test_invalid_renderer_timeline_is_a_failed_audit_not_a_pipeline_crash(api):
+    from score_render_audit import compare_rendered_score
+    rendered = ET.fromstring('''<score-partwise><part id="P1"><measure number="1">
+        <attributes><divisions>1</divisions></attributes>
+        <backup><duration>2</duration></backup>
+        <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note>
+        </measure></part></score-partwise>''')
+    audit = compare_rendered_score(tree(note()), rendered)
+    assert not audit['eventsMatch']
+    assert not audit['semanticAudit']['passed']
+    assert audit['semanticAudit']['issues'][0]['code'] == 'invalid_renderer_export'
