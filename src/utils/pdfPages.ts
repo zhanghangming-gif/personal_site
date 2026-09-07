@@ -1,7 +1,9 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+// The version query also replaces any browser-cached response from servers that
+// previously served `.mjs` with the wrong MIME type.
+GlobalWorkerOptions.workerSrc = `${pdfWorkerUrl}?v=2`;
 
 export const MAX_SCORE_SOURCE_PAGES = 500;
 export const MAX_SCORE_SELECTED_PAGES = 20;
