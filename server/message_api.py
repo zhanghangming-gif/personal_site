@@ -1422,6 +1422,17 @@ def sanitize_audiveris_book(source_path, output_path):
                         node.attrib.get("id"): local_name(node.tag)
                         for node in list(inters) if node.attrib.get("id")
                     }
+                    contained_by = {}
+                    for relation in list(relations):
+                        if any(local_name(node.tag) == "containment" for node in relation.iter()):
+                            contained_by[relation.attrib.get("target")] = relation.attrib.get("source")
+                    for inter in list(inters):
+                        shape = inter.attrib.get("shape", "")
+                        container_type = inter_types.get(contained_by.get(inter.attrib.get("id")))
+                        if (local_name(inter.tag) == "head" and shape.endswith("_SMALL")
+                                and container_type == "head-chord"):
+                            inter.attrib["shape"] = shape[:-6]
+                            removed += 1
                     for relation in list(relations):
                         has_grace_relation = any(
                             local_name(node.tag) == "chord-grace" for node in relation.iter()
