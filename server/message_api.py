@@ -748,6 +748,52 @@ def detect_multirest_visual_bar(image, left, right, staff_lines):
     return False
 
 
+def detect_boxed_number(image, marker, staff_spacing):
+    """Confirm a numeric label surrounded by a printed rectangle.
+
+    Boxed measure anchors occur throughout many orchestral parts. Requiring
+    four raster edges avoids confusing tempo numbers, fingerings and rehearsal
+    text with measure numbers.
+    """
+    if image is None or not marker or staff_spacing <= 0:
+        return False
+    try:
+        x = int(marker.get("x")); y = int(marker.get("y"))
+        width = max(1, int(marker.get("width") or 1))
+        height = max(1, int(marker.get("height") or 1))
+    except (TypeError, ValueError):
+        return False
+
+    def dark_ratio(points):
+        usable = [(px, py) for px, py in points
+                  if 0 <= px < image.size[0] and 0 <= py < image.size[1]]
+        if not usable:
+            return 0.0
+        return sum(image.getpixel((px, py)) < 128 for px, py in usable) / float(len(usable))
+
+    maximum_pad = max(4, int(round(staff_spacing * 0.8)))
+    # Audiveris word bounds may enclose either the digits alone or the complete
+    # box. Search a few pixels inside the reported bounds as well as outside.
+    best = [0.0, 0.0, 0.0, 0.0]
+    for pad in range(-3, maximum_pad + 1):
+        left, right = x - pad, x + width - 1 + pad
+        top, bottom = y - pad, y + height - 1 + pad
+        if right <= left or bottom <= top:
+            continue
+        horizontal = range(left, right + 1)
+        vertical = range(top, bottom + 1)
+        ratios = (
+            dark_ratio([(px, top) for px in horizontal]),
+            dark_ratio([(px, bottom) for px in horizontal]),
+            dark_ratio([(left, py) for py in vertical]),
+            dark_ratio([(right, py) for py in vertical]),
+        )
+        best = [max(before, after) for before, after in zip(best, ratios)]
+    # OCR bounds are frequently asymmetric around the surrounding rectangle,
+    # so each edge may occur at a different offset.
+    return min(best) >= 0.45
+
+
 def analyze_audiveris_output(output):
     text = output or ""
     multirests = re.findall(r"Measure\{#([^}]+)\}\s+Multirest with no measure count", text)
@@ -970,6 +1016,11 @@ def analyze_audiveris_book(path):
                     "lineStartRaw": line_start,
                     "staffLeft": staff_left,
                     "staffTop": staff_top,
+                    "staffSpacing": (
+                        sorted([b - a for a, b in zip(staff_lines, staff_lines[1:])
+                                if b > a])[len(staff_lines) // 2 - 1]
+                        if len(staff_lines) >= 2 else 0
+                    ),
                     "imageWidth": page_width,
                     "imageHeight": page_height,
                     "staffCount": sum(1 for item in system.iter() if local_name(item.tag) == "staff"),
@@ -1098,6 +1149,47 @@ def analyze_audiveris_book(path):
                             ),
                         })
                 item["restCounts"] = rest_counts
+                rest_span = {
+                    int(row.get("stackIndex")): int(row.get("value"))
+                    for row in rest_counts
+                    if type(row.get("stackIndex")) is int
+                    and type(row.get("value")) is int
+                }
+                boxed_anchors = []
+                stacks = item.get("stacks") or []
+                tolerance = max(8, int((item.get("staffSpacing") or 0) * 0.8))
+                for marker in markers:
+                    if marker.get("kind") not in ("word", "pdf-text"):
+                        continue
+                    if not detect_boxed_number(
+                            page_image, marker, item.get("staffSpacing") or 0):
+                        continue
+                    marker_center = marker.get("x", 0) + marker.get("width", 0) / 2.0
+                    candidates = [
+                        (abs(marker_center - stack.get("left", 0)), position)
+                        for position, stack in enumerate(stacks)
+                    ]
+                    if not candidates:
+                        continue
+                    distance, stack_index = min(candidates)
+                    if distance > tolerance:
+                        continue
+                    prefix = sum(rest_span.get(position, 1)
+                                 for position in range(stack_index))
+                    line_start = int(marker["value"]) - prefix
+                    if line_start <= 0:
+                        continue
+                    boxed_anchors.append({
+                        "value": int(marker["value"]),
+                        "stackIndex": stack_index,
+                        "derivedLineStart": line_start,
+                        "distanceToBoundary": distance,
+                        "basis": "boxed-number-at-stack-boundary",
+                    })
+                item["boxedMeasureAnchors"] = boxed_anchors
+                derived = sorted(set(row["derivedLineStart"] for row in boxed_anchors))
+                if len(derived) == 1:
+                    item["lineStartInterior"] = derived[0]
             systems.extend(page_systems)
 
     options = []
@@ -1105,6 +1197,8 @@ def analyze_audiveris_book(path):
         values = []
         if item.get("lineStartRaw") is not None:
             values.append((item["lineStartRaw"], 0))
+        if item.get("lineStartInterior") is not None:
+            values.append((item["lineStartInterior"], 1))
         ocr_values = list(item.get("lineStartOcrCandidates") or [])
         previous_raw = next((
             candidate.get("lineStartRaw") for candidate in reversed(systems[:index])

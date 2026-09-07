@@ -121,6 +121,18 @@ def test_flat_rest_bar_is_detected_without_treating_sloping_beam_as_same_shape(a
     assert not api.detect_multirest_visual_bar(sloping, 60, 255, staff_lines)
 
 
+def test_boxed_measure_number_is_distinguished_from_plain_tempo_number(api):
+    image = Image.new('L', (240, 140), 255)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((54, 28, 102, 68), radius=6, outline=0, width=2)
+    draw.text((66, 38), '72', fill=0)
+    boxed = {'x': 54, 'y': 28, 'width': 49, 'height': 41}
+    plain = {'x': 140, 'y': 28, 'width': 36, 'height': 24}
+    draw.text((140, 28), '96', fill=0)
+    assert api.detect_boxed_number(image, boxed, 18)
+    assert not api.detect_boxed_number(image, plain, 18)
+
+
 def test_printed_count_on_zero_duration_stack_is_kept_as_structure_evidence(api, tmp_path):
     path = tmp_path / 'zero-duration-count.omr'
     xml = '''<sheet><picture width="1000" height="1400"/><system>
