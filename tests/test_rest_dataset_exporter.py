@@ -57,3 +57,31 @@ def test_deduplicate_keeps_reviewed_copy_from_repeated_jobs():
                  'gapId': 'candidate', 'state': 'unreviewed', 'prelabel': None}
     reviewed = dict(duplicate, state='accepted', annotation={'targets': []})
     assert exporter.deduplicated_records([duplicate, reviewed, duplicate]) == [reviewed]
+
+
+def test_structure_system_export_contains_multiple_barline_prelabels(tmp_path):
+    exporter = exporter_module()
+    job = tmp_path / 'anonymous-score'
+    (job / 'inspection').mkdir(parents=True)
+    pdf = fitz.open(); page = pdf.new_page(width=300, height=200)
+    for y in (80, 85, 90, 95, 100):
+        page.draw_line((30, y), (270, y))
+    pdf.save(str(job / 'input.pdf')); pdf.close()
+    (job / 'inspection' / 'structure-candidates.json').write_text(json.dumps({
+        'pages': [{'page': 1, 'systems': [{
+            'candidateIndex': 1, 'bbox': [30, 70, 270, 110],
+            'staffSpacing': 5, 'barlines': [80, 160, 240],
+            'basis': 'pdf_vector_geometry',
+        }]}],
+    }), encoding='utf-8')
+    images = tmp_path / 'dataset' / 'images'; images.mkdir(parents=True)
+    records = exporter.export_job(
+        job, images, 800, {}, include_structure=True,
+        maximum_structure_systems=6,
+    )
+    assert len(records) == 1
+    sample = records[0]
+    assert sample['taskType'] == 'structure'
+    assert [target['class'] for target in sample['prelabels']] == ['barline'] * 3
+    assert sample['dpi'] == 400
+    assert Path(images / Path(sample['image']).name).is_file()

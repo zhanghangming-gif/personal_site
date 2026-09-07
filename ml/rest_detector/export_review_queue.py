@@ -186,14 +186,109 @@ def job_directories(root):
                   if path.is_dir() and (path / "input.pdf").is_file())
 
 
+def structure_system_records(job_dir, document, document_hash, image_dir, dpi,
+                             previous, maximum_systems):
+    """Export deterministic whole-system crops with geometric barline prelabels.
+
+    Geometry is only a prelabel. Humans can add measure numbers, multi-rest
+    numbers, rehearsal marks, time signatures and the staff-system extent.
+    """
+    structure_path = job_dir / "inspection" / "structure-candidates.json"
+    if not structure_path.is_file():
+        return []
+    try:
+        pages = load_json(structure_path).get("pages", [])
+    except (OSError, TypeError, ValueError):
+        return []
+    candidates = []
+    for page_data in pages:
+        page_number = page_data.get("page")
+        if not isinstance(page_number, int) or not 1 <= page_number <= len(document):
+            continue
+        for system in page_data.get("systems") or []:
+            if not isinstance(system, dict) or not isinstance(system.get("bbox"), list):
+                continue
+            key = hashlib.sha256(("%s|%s|%s" % (
+                document_hash, page_number, system.get("candidateIndex"))).encode("utf-8")).hexdigest()
+            candidates.append((key, page_number, system))
+    candidates.sort(key=lambda item: item[0])
+    selected = sorted(candidates[:maximum_systems], key=lambda item: (
+        item[1], item[2].get("candidateIndex") or 0))
+    records = []
+    structure_dpi = min(int(dpi), 400)
+    scale = structure_dpi / 72.0
+    for _key, page_number, system in selected:
+        page = document[page_number - 1]
+        bbox = clipped_box(system.get("bbox"), page.rect.width, page.rect.height)
+        if bbox is None:
+            continue
+        spacing = max(1.0, float(system.get("staffSpacing") or 4.0))
+        crop = clipped_box([
+            bbox[0] - spacing * 2, bbox[1] - spacing * 5,
+            bbox[2] + spacing * 2, bbox[3] + spacing * 3,
+        ], page.rect.width, page.rect.height)
+        if crop is None:
+            continue
+        system_index = int(system.get("candidateIndex") or 0)
+        sample_id = hashlib.sha256(("%s|structure-system|%s|%s|%s" % (
+            document_hash, page_number, system_index, json.dumps(crop))).encode("utf-8")).hexdigest()[:24]
+        image_name = "%s-structure-p%s-s%s.png" % (sample_id, page_number, system_index)
+        image_path = image_dir / image_name
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
+                                 clip=fitz.Rect(crop), alpha=False)
+        pixmap.save(str(image_path))
+        prelabels = []
+        staff_top = max(crop[1], bbox[1])
+        staff_bottom = min(crop[3], bbox[3])
+        half_width = max(0.55, spacing * 0.16)
+        for x in system.get("barlines") or []:
+            if len(prelabels) >= 32:
+                break
+            try:
+                object_box = [float(x) - half_width, staff_top,
+                              float(x) + half_width, staff_bottom]
+            except (TypeError, ValueError):
+                continue
+            pixel_box = relative_pixel_box(
+                object_box, crop, structure_dpi, pixmap.width, pixmap.height)
+            if pixel_box:
+                prelabels.append({
+                    "class": "barline", "bboxXyxy": pixel_box, "dots": 0,
+                    "source": "pdf_vector_geometry",
+                })
+        old = previous.get(sample_id, {})
+        state = old.get("state") if old.get("state") in VALID_STATES else "unreviewed"
+        records.append({
+            "schemaVersion": 2, "sampleId": sample_id,
+            "taskType": "structure", "image": "images/" + image_name,
+            "imageWidth": pixmap.width, "imageHeight": pixmap.height,
+            "documentSha256": document_hash, "sourceJobId": job_dir.name,
+            "sourcePdfStored": False,
+            "gapId": "structure-p%s-s%s" % (page_number, system_index),
+            "measureId": None, "page": page_number, "voice": None,
+            "onset": None, "duration": None, "position": "staff_system",
+            "crop": crop, "cropCoordinateSystem": "pdf_points_top_left",
+            "cropBasis": system.get("basis") or "pdf_vector_geometry",
+            "imageSource": "source_pdf", "dpi": structure_dpi,
+            "prelabel": prelabels[0] if prelabels else None,
+            "prelabels": prelabels, "classificationStatus": "structure_geometry_prelabel",
+            "state": state, "annotation": old.get("annotation"),
+            "annotator": old.get("annotator"), "reviewedAt": old.get("reviewedAt"),
+        })
+    return records
+
+
 def export_job(job_dir, image_dir, dpi, previous, include_all_omr=False,
-               maximum_omr_per_class=25):
+               maximum_omr_per_class=25, include_structure=False,
+               maximum_structure_systems=6):
     rhythm_path = job_dir / "review" / "rhythm-gaps.json"
     rest_path = job_dir / "review" / "rest-classification.json"
     pdf_path = job_dir / "input.pdf"
     omr_path = job_dir / "omr" / "input.omr"
+    structure_path = job_dir / "inspection" / "structure-candidates.json"
     if (not rhythm_path.is_file() or not rest_path.is_file()) and not (
-            include_all_omr and omr_path.is_file()):
+            include_all_omr and omr_path.is_file()) and not (
+            include_structure and structure_path.is_file()):
         return []
     rhythm = load_json(rhythm_path) if rhythm_path.is_file() else {"gaps": []}
     rest = load_json(rest_path) if rest_path.is_file() else {"classifications": []}
@@ -315,6 +410,10 @@ def export_job(job_dir, image_dir, dpi, previous, include_all_omr=False,
                     "state": state, "annotation": old.get("annotation"),
                     "annotator": old.get("annotator"), "reviewedAt": old.get("reviewedAt"),
                 })
+        if include_structure:
+            records.extend(structure_system_records(
+                job_dir, document, document_hash, image_dir, dpi, previous,
+                maximum_structure_systems))
     finally:
         if archive is not None:
             archive.close()
@@ -329,6 +428,8 @@ def main():
     parser.add_argument("--dpi", type=int, default=800, choices=(400, 600, 800))
     parser.add_argument("--include-all-omr-rests", action="store_true")
     parser.add_argument("--max-omr-per-class-per-document", type=int, default=5)
+    parser.add_argument("--include-structure-systems", action="store_true")
+    parser.add_argument("--max-structure-systems-per-document", type=int, default=6)
     args = parser.parse_args()
     root, output = args.jobs_root.resolve(), args.output.resolve()
     if not root.is_dir():
@@ -341,7 +442,9 @@ def main():
     for job_dir in job_directories(root):
         records.extend(export_job(
             job_dir, image_dir, args.dpi, previous, args.include_all_omr_rests,
-            max(1, min(200, args.max_omr_per_class_per_document))))
+            max(1, min(200, args.max_omr_per_class_per_document)),
+            args.include_structure_systems,
+            max(1, min(50, args.max_structure_systems_per_document))))
     records = deduplicated_records(records)
     with queue_path.open("w", encoding="utf-8", newline="\n") as stream:
         for record in records:
@@ -353,6 +456,7 @@ def main():
         "documentCount": len({item["documentSha256"] for item in records}),
         "stateCounts": states,
         "prelabelCount": sum(item["prelabel"] is not None for item in records),
+        "structureSampleCount": sum(item.get("taskType") == "structure" for item in records),
         "sourcePdfCopied": False,
     }
     with (output / "manifest.json").open("w", encoding="utf-8") as stream:

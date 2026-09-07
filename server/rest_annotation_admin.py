@@ -24,6 +24,15 @@ REST_CLASSES = (
     "quarter_rest", "eighth_rest", "16th_rest", "32nd_rest", "64th_rest",
     "128th_rest", "multi_measure_rest",
 )
+STRUCTURE_CLASSES = (
+    "barline", "measure_number", "multi_measure_rest_number",
+    "rehearsal_mark", "time_signature", "staff_system",
+)
+ANNOTATION_CLASSES = REST_CLASSES + STRUCTURE_CLASSES
+TEXT_CLASSES = {
+    "measure_number", "multi_measure_rest_number", "rehearsal_mark",
+    "time_signature",
+}
 _LOCK = threading.RLock()
 
 
@@ -81,6 +90,10 @@ def _revision(item):
 
 def _public_item(item):
     prelabel = item.get("prelabel") if isinstance(item.get("prelabel"), dict) else None
+    prelabels = item.get("prelabels") if isinstance(item.get("prelabels"), list) else []
+    prelabels = [value for value in prelabels if isinstance(value, dict)]
+    if prelabel and not prelabels:
+        prelabels = [prelabel]
     result = {
         "sampleId": item.get("sampleId"),
         "imageUrl": "/api/admin/rest-annotations/%s/image" % item.get("sampleId"),
@@ -91,7 +104,9 @@ def _public_item(item):
         "duration": item.get("duration"), "position": item.get("position"),
         "imageSource": item.get("imageSource"),
         "classificationStatus": item.get("classificationStatus"),
-        "prelabel": prelabel, "state": item.get("state", "unreviewed"),
+        "taskType": item.get("taskType", "rest"),
+        "prelabel": prelabel, "prelabels": prelabels,
+        "state": item.get("state", "unreviewed"),
         "annotation": item.get("annotation"), "reviewedAt": item.get("reviewedAt"),
     }
     result["revision"] = _revision(item)
@@ -139,7 +154,7 @@ def list_samples(dataset_dir, state="all", offset=0, limit=40):
     return {
         "items": [_public_item(item) for item in selected[offset:offset + limit]],
         "offset": offset, "limit": limit, "filteredTotal": len(selected),
-        "counts": counts, "classes": list(REST_CLASSES),
+        "counts": counts, "classes": list(ANNOTATION_CLASSES),
     }
 
 
@@ -156,11 +171,11 @@ def _number(value, label):
 
 
 def _validate_target(target, width, height):
-    if not isinstance(target, dict) or set(target) - {"class", "bboxXyxy", "dots"}:
+    if not isinstance(target, dict) or set(target) - {"class", "bboxXyxy", "dots", "text"}:
         raise ValueError("目标标注格式无效")
     class_name = target.get("class")
-    if class_name not in REST_CLASSES:
-        raise ValueError("休止符类别无效")
+    if class_name not in ANNOTATION_CLASSES:
+        raise ValueError("乐谱目标类别无效")
     box = target.get("bboxXyxy")
     if not isinstance(box, list) or len(box) != 4:
         raise ValueError("目标框必须包含四个坐标")
@@ -171,7 +186,15 @@ def _validate_target(target, width, height):
     dots = target.get("dots", 0)
     if isinstance(dots, bool) or not isinstance(dots, int) or not 0 <= dots <= 3:
         raise ValueError("附点数必须是 0 到 3 的整数")
-    return {"class": class_name, "bboxXyxy": [round(value, 2) for value in box], "dots": dots}
+    if class_name not in REST_CLASSES and dots:
+        raise ValueError("结构目标不能设置休止符附点")
+    text = str(target.get("text") or "").strip()[:24]
+    if class_name in TEXT_CLASSES and not text:
+        raise ValueError("数字、拍号或排练标记请填写框内文字")
+    result = {"class": class_name, "bboxXyxy": [round(value, 2) for value in box], "dots": dots}
+    if text:
+        result["text"] = text
+    return result
 
 
 def update_sample(dataset_dir, sample_id, payload):
@@ -189,21 +212,25 @@ def update_sample(dataset_dir, sample_id, payload):
         state = payload["state"]
         width, height = float(item.get("imageWidth") or 0), float(item.get("imageHeight") or 0)
         targets = payload.get("targets", [])
-        if not isinstance(targets, list) or len(targets) > 8:
-            raise ValueError("每张裁片最多标注 8 个目标")
+        if not isinstance(targets, list) or len(targets) > 32:
+            raise ValueError("每张裁片最多标注 32 个目标")
         if state in ("accepted", "corrected"):
             if not targets:
                 raise ValueError("确认或修正样本至少需要一个目标框")
             targets = [_validate_target(target, width, height) for target in targets]
             if state == "accepted":
                 prelabel = item.get("prelabel")
-                if not isinstance(prelabel, dict):
+                raw_prelabels = (item.get("prelabels")
+                                 if isinstance(item.get("prelabels"), list) else [])
+                if not raw_prelabels and isinstance(prelabel, dict):
+                    raw_prelabels = [prelabel]
+                if not raw_prelabels:
                     raise ValueError("没有 OMR 预标的样本不能标记为直接接受")
-                expected = _validate_target({
-                    "class": prelabel.get("class"), "bboxXyxy": prelabel.get("bboxXyxy"),
-                    "dots": prelabel.get("dots", 0),
-                }, width, height)
-                if targets != [expected]:
+                expected_targets = [_validate_target({
+                    "class": value.get("class"), "bboxXyxy": value.get("bboxXyxy"),
+                    "dots": value.get("dots", 0), "text": value.get("text", ""),
+                }, width, height) for value in raw_prelabels if isinstance(value, dict)]
+                if targets != expected_targets:
                     raise ValueError("修改过的预标必须保存为人工修正")
         elif targets:
             raise ValueError("拒绝或跳过样本不能包含目标框")
@@ -248,6 +275,8 @@ def refresh_samples(dataset_dir, jobs_root, exporter_path, python_path, dpi=800)
     command = [python_path, exporter_path, "--jobs-root", jobs_root,
                "--output", dataset_dir, "--dpi", str(int(dpi)),
                "--include-all-omr-rests", "--max-omr-per-class-per-document", "5"]
+    command.extend(["--include-structure-systems",
+                    "--max-structure-systems-per-document", "6"])
     completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                timeout=900, universal_newlines=True)
     if completed.returncode != 0:
@@ -370,7 +399,7 @@ def build_training_archive(dataset_dir):
         descriptor, archive_path = tempfile.mkstemp(prefix="rest-training-", suffix=".zip")
         os.close(descriptor)
         categories = [{"id": index + 1, "name": name}
-                      for index, name in enumerate(REST_CLASSES)]
+                      for index, name in enumerate(ANNOTATION_CLASSES)]
         category_ids = {item["name"]: item["id"] for item in categories}
         coco = {split: {"images": [], "annotations": [], "categories": categories}
                 for split in ("train", "validation", "test")}
@@ -400,19 +429,21 @@ def build_training_archive(dataset_dir):
                             "category_id": category_ids[target["class"]],
                             "bbox": [box[0], box[1], width, height], "area": width * height,
                             "iscrowd": 0, "dots": target.get("dots", 0),
+                            "text": target.get("text", ""),
                         })
                         annotation_id += 1
                 for split, payload in coco.items():
                     archive.writestr("annotations/%s.json" % split,
                                      json.dumps(payload, ensure_ascii=False, indent=2))
                 archive.writestr("dataset-manifest.json", json.dumps({
-                    "schemaVersion": 1, "createdAt": _utcnow(),
+                    "schemaVersion": 2, "createdAt": _utcnow(),
                     "sampleCount": len(records),
                     "reviewedSampleCount": reviewed_count,
                     "duplicateSampleCount": duplicate_count,
                     "conflictingDuplicateGroupCount": conflict_count,
                     "documentCount": len(set(item.get("documentSha256") for item in records)),
                     "splitBy": "documentSha256", "sourcePdfIncluded": False,
+                    "annotationClasses": list(ANNOTATION_CLASSES),
                     "splits": {name: sum(1 for item in records if
                                           document_splits[item.get("documentSha256") or "unknown"] == name)
                                for name in ("train", "validation", "test")},

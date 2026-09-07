@@ -78,6 +78,35 @@ def test_corrected_box_is_bounded_and_skipped_needs_reason(tmp_path):
         })
 
 
+def test_structure_targets_support_multiple_prelabels_and_ocr_text(tmp_path):
+    record = seed_dataset(tmp_path)
+    record['taskType'] = 'structure'
+    record['prelabel'] = {'class': 'barline', 'bboxXyxy': [20, 10, 24, 90], 'dots': 0}
+    record['prelabels'] = [
+        record['prelabel'],
+        {'class': 'barline', 'bboxXyxy': [100, 10, 104, 90], 'dots': 0},
+    ]
+    (tmp_path / 'queue.jsonl').write_text(json.dumps(record) + '\n', encoding='utf-8')
+    item = list_samples(str(tmp_path))['items'][0]
+    assert item['taskType'] == 'structure' and len(item['prelabels']) == 2
+    saved = update_sample(str(tmp_path), item['sampleId'], {
+        'revision': item['revision'], 'state': 'accepted',
+        'targets': item['prelabels'], 'reason': '',
+    })
+    with pytest.raises(ValueError, match='填写框内文字'):
+        update_sample(str(tmp_path), saved['sampleId'], {
+            'revision': saved['revision'], 'state': 'corrected',
+            'targets': [{'class': 'measure_number', 'bboxXyxy': [5, 5, 25, 25],
+                         'dots': 0}], 'reason': '',
+        })
+    corrected = update_sample(str(tmp_path), saved['sampleId'], {
+        'revision': saved['revision'], 'state': 'corrected',
+        'targets': [{'class': 'measure_number', 'bboxXyxy': [5, 5, 25, 25],
+                     'dots': 0, 'text': '23'}], 'reason': '',
+    })
+    assert corrected['annotation']['targets'][0]['text'] == '23'
+
+
 def test_coco_export_contains_only_reviewed_images_and_no_pdf(tmp_path):
     seed_dataset(tmp_path)
     item = list_samples(str(tmp_path))['items'][0]

@@ -10,5 +10,11 @@
   "32nd_rest",
   "64th_rest",
   "128th_rest",
-  "multi_measure_rest"
+  "multi_measure_rest",
+  "barline",
+  "measure_number",
+  "multi_measure_rest_number",
+  "rehearsal_mark",
+  "time_signature",
+  "staff_system"
 ]
