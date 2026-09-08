@@ -35,3 +35,14 @@ def test_risky_locations_prioritize_structured_gaps_and_deduplicate(tmp_path):
 
 def test_visual_reviewer_has_no_authority_to_approve_output():
     assert '不能批准候选 PDF' in worker().SYSTEM or '不声明整份乐谱正确' in worker().SYSTEM
+
+
+def test_visual_reviewer_accepts_fenced_json_but_rejects_empty_output():
+    module = worker()
+    value = module.parse_model_json('```json\n{"summary":"ok","regions":[]}\n```')
+    assert value['summary'] == 'ok'
+    try:
+        module.parse_model_json('')
+        assert False, 'empty output must fail'
+    except ValueError:
+        pass

@@ -7,6 +7,7 @@ import argparse
 import base64
 import json
 import os
+import re
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -98,6 +99,26 @@ def image_part(path):
         'url': 'data:image/png;base64,' + data, 'detail': 'original'}}
 
 
+def parse_model_json(text):
+    """Accept strict JSON and common fenced JSON without trusting prose."""
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError('empty model output')
+    candidate = text.strip()
+    fenced = re.fullmatch(r'```(?:json)?\s*(.*?)\s*```', candidate, re.I | re.S)
+    if fenced:
+        candidate = fenced.group(1).strip()
+    try:
+        value = json.loads(candidate)
+    except ValueError:
+        start, end = candidate.find('{'), candidate.rfind('}')
+        if start < 0 or end <= start:
+            raise
+        value = json.loads(candidate[start:end + 1])
+    if not isinstance(value, dict) or not isinstance(value.get('regions'), list):
+        raise ValueError('AI 视觉复核返回格式无效')
+    return value
+
+
 def call_model(job_dir, regions):
     job = Path(job_dir)
     content = [{'type': 'text', 'text': '逐区域比较。每对图片顺序都是原谱、候选谱。区域元数据：' +
@@ -109,29 +130,38 @@ def call_model(job_dir, regions):
         content.append({'type': 'text', 'text': row['id'] + ' 候选谱'})
         content.append(image_part(job / row['targetImage']))
     url = os.environ.get('DEEPSEEK_API_URL', 'https://api.deepseek.com/chat/completions')
-    payload = json.dumps({
-        'model': os.environ.get('SCORE_VISION_MODEL', MODEL),
-        'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': content}],
-        'response_format': {'type': 'json_object'}, 'temperature': 0,
-        'max_tokens': 4000,
-    }, ensure_ascii=False).encode('utf-8')
-    request = Request(url, data=payload, method='POST', headers={
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + os.environ['DEEPSEEK_API_KEY'],
-    })
-    try:
-        with urlopen(request, timeout=150) as response:
-            raw = response.read(2 * 1024 * 1024)
-    except HTTPError as exc:
-        raise RuntimeError('AI 视觉复核请求失败（HTTP %s）' % exc.code)
-    except (URLError, TimeoutError):
-        raise RuntimeError('AI 视觉复核连接失败或超时')
-    result = json.loads(raw.decode('utf-8'))
-    text = result['choices'][0]['message']['content']
-    observation = json.loads(text)
-    if not isinstance(observation, dict) or not isinstance(observation.get('regions'), list):
-        raise RuntimeError('AI 视觉复核返回格式无效')
-    return observation, result.get('usage') or {}, result.get('model')
+    last_error = None
+    for attempt in range(2):
+        messages = [{'role': 'system', 'content': SYSTEM},
+                    {'role': 'user', 'content': content}]
+        if attempt:
+            messages.append({'role': 'user', 'content':
+                             '上一次没有返回可解析的 JSON。只返回一个 JSON 对象，不要代码围栏或解释。'})
+        payload = json.dumps({
+            'model': os.environ.get('SCORE_VISION_MODEL', MODEL),
+            'messages': messages,
+            'response_format': {'type': 'json_object'}, 'temperature': 0,
+            'max_tokens': 4000,
+        }, ensure_ascii=False).encode('utf-8')
+        request = Request(url, data=payload, method='POST', headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + os.environ['DEEPSEEK_API_KEY'],
+        })
+        try:
+            with urlopen(request, timeout=150) as response:
+                raw = response.read(2 * 1024 * 1024)
+            result = json.loads(raw.decode('utf-8'))
+            message = result['choices'][0]['message']
+            text = message.get('content') or message.get('reasoning_content') or ''
+            observation = parse_model_json(text)
+            return observation, result.get('usage') or {}, result.get('model')
+        except HTTPError as exc:
+            raise RuntimeError('AI 视觉复核请求失败（HTTP %s）' % exc.code)
+        except (URLError, TimeoutError):
+            raise RuntimeError('AI 视觉复核连接失败或超时')
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+    raise RuntimeError('AI 视觉复核连续两次返回无效格式：%s' % last_error)
 
 
 def run(job_dir):
