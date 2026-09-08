@@ -162,6 +162,7 @@ export default function ScoreTransposePage() {
     [en, pageRange, pageSelectionMode, pdfPageCount],
   );
   const selectedPageCount = pageSelectionMode === 'all' ? (pdfPageCount ?? 0) : parsedPageSelection.pages.length;
+  const progressPercent = Math.min(100, Math.max(0, Math.round(progress)));
   const pageSelectionInvalid = Boolean(
     file && (pageCountLoading || pageCountError || !pdfPageCount ||
       (pageSelectionMode === 'all' ? pdfPageCount > MAX_SCORE_SELECTED_PAGES : parsedPageSelection.error)),
@@ -565,12 +566,17 @@ export default function ScoreTransposePage() {
           </div>
 
           <div className="surface rounded-2xl p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <Gauge size={18} className="text-teal-600" />
-              <h2 className="font-black">{en ? 'Task status' : '任务状态'}</h2>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Gauge size={18} className="text-teal-600" />
+                <h2 className="font-black">{en ? 'Task status' : '任务状态'}</h2>
+              </div>
+              <div className="min-w-[4.5rem] rounded-full bg-blue-50 px-3 py-1.5 text-center text-lg font-black tabular-nums text-blue-700 ring-1 ring-inset ring-blue-200/80 dark:bg-blue-400/10 dark:text-blue-300 dark:ring-blue-400/20">
+                {progressPercent}<span className="ml-0.5 text-sm">%</span>
+              </div>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-              <div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-teal-500 transition-all duration-500" style={{ width: `${progress}%` }} />
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800" role="progressbar" aria-label={en ? 'Score transposition progress' : '乐谱转换进度'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent}>
+              <div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-teal-500 transition-all duration-500" style={{ width: `${progressPercent}%` }} />
             </div>
             <p role="status" aria-live="polite" className="mt-3 text-sm leading-6 text-slate-500">{statusMessage}</p>
             <div className="mt-4 grid gap-2">
