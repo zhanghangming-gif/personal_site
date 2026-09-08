@@ -10,6 +10,7 @@ import {
   Gauge,
   Loader2,
   Music2,
+  PencilLine,
   RefreshCw,
   ShieldCheck,
   SlidersHorizontal,
@@ -626,8 +627,17 @@ export default function ScoreTransposePage() {
                   <a href={availablePdf || '#'} target="_blank" rel="noreferrer" className={`button-secondary ${!availablePdf ? 'pointer-events-none opacity-45' : ''}`}>
                     <FileText size={17} />{en ? 'Open PDF' : '打开 PDF'}
                   </a>
+                  {result.editorAvailable && (
+                    <button
+                      type="button"
+                      className="group inline-flex min-h-14 items-center justify-center gap-2.5 rounded-full bg-gradient-to-b from-blue-500 to-blue-600 px-7 text-base font-black text-white shadow-[0_10px_28px_rgba(37,99,235,0.3)] ring-1 ring-inset ring-blue-300/70 transition duration-200 hover:-translate-y-0.5 hover:from-blue-400 hover:to-blue-600 hover:shadow-[0_14px_34px_rgba(37,99,235,0.38)] active:translate-y-0 active:scale-[0.98]"
+                      onClick={() => setEditorOpen(v => !v)}
+                    >
+                      <PencilLine size={21} strokeWidth={2.4} className="transition-transform duration-200 group-hover:-rotate-6 group-hover:scale-110" />
+                      {editorOpen ? (en ? 'Close score editor' : '收起在线校谱') : (en ? 'Edit score online' : '在线修改乐谱')}
+                    </button>
+                  )}
                   {result.reportUrl && <a href={result.reportUrl} className="button-secondary">{en ? 'Review checklist' : '下载校对清单'}</a>}
-                  {result.editorAvailable && <button type="button" className="button-secondary" onClick={() => setEditorOpen(v => !v)}>{editorOpen ? (en ? 'Close editor' : '收起在线校谱') : (en ? 'Edit score' : '在线修改乐谱')}</button>}
                 </div>
               </div>
               <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
