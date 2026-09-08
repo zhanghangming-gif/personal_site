@@ -140,6 +140,7 @@ def call_model(job_dir, regions):
         payload = json.dumps({
             'model': os.environ.get('SCORE_VISION_MODEL', MODEL),
             'messages': messages,
+            'thinking': {'type': 'disabled'},
             'response_format': {'type': 'json_object'}, 'temperature': 0,
             'max_tokens': 4000,
         }, ensure_ascii=False).encode('utf-8')
