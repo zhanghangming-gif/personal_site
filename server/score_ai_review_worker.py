@@ -23,6 +23,7 @@ SYSTEM = """你是乐谱视觉复核器。输入是同一转调任务中已定�
 没有清晰字形时必须写不确定，不能根据缺少时值直接猜休止符种类。
 返回 JSON 对象：summary、regions。regions 每项包含 id、sourceObservations、
 targetObservations、differences、confidence（high/medium/low）、manualReviewRequired。
+summary 用一句话；三个 observations/differences 字段均为简短字符串数组，每个最多 3 项。
 """
 
 
@@ -142,7 +143,7 @@ def call_model(job_dir, regions):
             'messages': messages,
             'thinking': {'type': 'disabled'},
             'response_format': {'type': 'json_object'}, 'temperature': 0,
-            'max_tokens': 4000,
+            'max_tokens': 8000,
         }, ensure_ascii=False).encode('utf-8')
         request = Request(url, data=payload, method='POST', headers={
             'Content-Type': 'application/json',
