@@ -1,0 +1,320 @@
+{
+  "schemaVersion": 1,
+  "benchmarkId": "part-score-frozen-blind-v1",
+  "description": "从 2026-09-09 起冻结的声部谱评测集。清单只保存元数据和摘要，PDF 不进入仓库，禁止进入后续训练。",
+  "trainingPolicy": "exclude_all_cases",
+  "cases": [
+    {
+      "caseId": "beethoven-symphony6-clarinet-scan",
+      "source": "01_Beethoven_Symphony6_Clarinet.pdf",
+      "sha256": "80041b10d1945565caf1408bc0b321c4a78bdcc48ad9f700130243cfe4361cfd",
+      "tags": [
+        "clarinet",
+        "scan",
+        "orchestral-part"
+      ],
+      "metadata": {
+        "composer": "Beethoven",
+        "part": "Clarinet",
+        "edition": "scan"
+      },
+      "expectations": {
+        "sourcePages": 13,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "scan",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "mozart-figaro-trumpet-legacy",
+      "source": "02_Mozart_Figaro_Overture_Trumpet.pdf",
+      "sha256": "ffd50e04b1a46feb4f22b396790f0d4a708a4d76d073f59fa0ba52fe948838e0",
+      "tags": [
+        "trumpet",
+        "legacy",
+        "orchestral-part"
+      ],
+      "metadata": {
+        "composer": "Mozart",
+        "part": "Trumpet",
+        "edition": "mixed/legacy"
+      },
+      "expectations": {
+        "sourcePages": 6,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "scan",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "mozart-symphony41-trumpet-c",
+      "source": "03_Mozart_Symphony41_Trumpet_C.pdf",
+      "sha256": "da941008c61113d842ff9e775d76baad4cc140e4365bc06dec4e0e1f2d28bb0e",
+      "tags": [
+        "trumpet",
+        "legacy",
+        "orchestral-part"
+      ],
+      "metadata": {
+        "composer": "Mozart",
+        "part": "Trumpet in C",
+        "edition": "legacy"
+      },
+      "expectations": {
+        "sourcePages": 8,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "scan",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "herold-zampa-trombone1-typeset",
+      "source": "04_Herold_Zampa_Overture_Trombone1_typeset.pdf",
+      "sha256": "5cf47a3f7b2bd31725fc70815b3a298ec1b7415fe194ce938551e7caedd63c67",
+      "tags": [
+        "trombone",
+        "typeset",
+        "orchestral-part"
+      ],
+      "metadata": {
+        "composer": "Herold",
+        "part": "Trombone 1",
+        "edition": "typeset"
+      },
+      "expectations": {
+        "sourcePages": 3,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "farrenc-overture2-tenor-trombone",
+      "source": "05_Farrenc_Overture2_TenorTrombone_typeset.pdf",
+      "sha256": "a6b36aa19ecda27785540d139d098da65af4b80ace0a9ee212fc1b1207859725",
+      "tags": [
+        "trombone",
+        "typeset",
+        "orchestral-part"
+      ],
+      "metadata": {
+        "composer": "Farrenc",
+        "part": "Tenor Trombone",
+        "edition": "typeset"
+      },
+      "expectations": {
+        "sourcePages": 2,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "mozart-symphony41-horn-f",
+      "source": "06_Mozart_Symphony41_HornF_typeset.pdf",
+      "sha256": "15e270aad998dd1fc5e8483c69321fbfc5ef75fa00f0a4931350214296a7ee72",
+      "tags": [
+        "horn",
+        "typeset",
+        "transposing-instrument"
+      ],
+      "metadata": {
+        "composer": "Mozart",
+        "part": "Horn in F",
+        "edition": "typeset"
+      },
+      "expectations": {
+        "sourcePages": 8,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "zemlinsky-fantasien-clarinet-parts",
+      "source": "08_Zemlinsky_Fantasien_ClarinetParts_Bb_A.pdf",
+      "sha256": "b1afc3e192e04dfbd354790b6c06ee02b6e4bfd7c4e76f2aac1285e7529e82cf",
+      "tags": [
+        "clarinet",
+        "typeset",
+        "multiple-part-sections"
+      ],
+      "metadata": {
+        "composer": "Zemlinsky",
+        "part": "Clarinet parts in Bb/A",
+        "edition": "typeset"
+      },
+      "expectations": {
+        "sourcePages": 9,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "haydn-symphony104-viola-scan",
+      "source": "09_Haydn_Symphony104_Viola_scan.pdf",
+      "sha256": "9a45ee2d687f280e307822b4f774a6524549372fce08ab11466139b99378ccbc",
+      "tags": [
+        "viola",
+        "scan",
+        "alto-clef"
+      ],
+      "metadata": {
+        "composer": "Haydn",
+        "part": "Viola",
+        "edition": "scan"
+      },
+      "expectations": {
+        "sourcePages": 8,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "scan",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "bach-goldberg-cello-part",
+      "source": "10_Bach_Goldberg_Cello_part.pdf",
+      "sha256": "fe07df79090b805431d2f01326835c0da9cd53c5b4d95cc2a8e6ae18e0a373b7",
+      "tags": [
+        "cello",
+        "typeset",
+        "bass-clef",
+        "long-score"
+      ],
+      "metadata": {
+        "composer": "Bach",
+        "part": "Cello",
+        "edition": "typeset"
+      },
+      "expectations": {
+        "sourcePages": 17,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "mendelssohn-hebrides-violin1",
+      "source": "11_Mendelssohn_Hebrides_Violin1.pdf",
+      "sha256": "f80c2d3dcd96341f80c2a27da4bc1c7aebf994ccfb9ce5517fb2d8451e2aa7c6",
+      "tags": [
+        "violin",
+        "legacy",
+        "dense-notation"
+      ],
+      "metadata": {
+        "composer": "Mendelssohn",
+        "part": "Violin 1",
+        "edition": "legacy/typeset"
+      },
+      "expectations": {
+        "sourcePages": 7,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "scan",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    },
+    {
+      "caseId": "schubert-overture-d8-violin1",
+      "source": "12_Schubert_Overture_D8_Violin1.pdf",
+      "sha256": "c93aa2f8ef6a9244c344da528c538d426b232dfbe082c5a95a5835827b9c3359",
+      "tags": [
+        "violin",
+        "typeset",
+        "dense-notation"
+      ],
+      "metadata": {
+        "composer": "Schubert",
+        "part": "Violin 1",
+        "edition": "typeset"
+      },
+      "expectations": {
+        "sourcePages": 6,
+        "outputRequired": true,
+        "allowedDocumentTypes": [
+          "vector",
+          "mixed"
+        ],
+        "staticContentRequired": true
+      },
+      "request": {
+        "semitones": 1,
+        "accidentalPreference": "auto"
+      }
+    }
+  ]
+}

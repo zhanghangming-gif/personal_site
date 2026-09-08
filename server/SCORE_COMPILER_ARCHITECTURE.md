@@ -58,12 +58,17 @@ OMR 结果先转换为 `Canonical Source Score`。小节、声部、时值、音
 
 ### 7. 候选导出和人工校谱
 
-任务保存源模型、目标模型和人工修改的版本链。网页编辑器修改目标乐谱数据，每次保存都生成新候选 PDF 和新校验记录。结构缺口必须由人对照原谱确认后才可插入整小节休止。
+任务保存源模型、目标模型和人工修改的版本链。网页显示目标谱供用户选择，但新任务中的
+修改会映射回 `canonical-source.musicxml`，随后再次执行确定性转调；结构修改直接作用于
+源谱。每次保存都生成新源版本、目标版本、候选 PDF 和校验记录。校正版源谱可以直接生成
+其他目标乐器版本，不再运行 OMR。旧任务没有稳定源版本时保留目标谱编辑兼容路径。
+结构缺口必须由人对照原谱确认后才可插入整小节休止。
 
 ## 主要产物
 
 - `evidence/source-evidence.json`：源 PDF 对象和渲染证据。
 - `scores/source/canonical-score.json`：源谱规范模型。
+- `scores/source/canonical-source.musicxml`：实际用于转调和人工修正的版本化源谱。
 - `scores/target/target-score.json`：转调后目标模型。
 - `review/transformation-proof.json`：确定性转调证明。
 - `review/rhythm-gaps.json`：逐声部节奏缺口、例外和待确认区域。

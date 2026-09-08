@@ -140,9 +140,26 @@ def editor_data(job_dir, read_xml):
             })
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         pass
-    return {'revision': digest, 'measures': measures, 'verified': False,
+    source_path = regular_file(job_dir, os.path.join(
+        'scores', 'source', 'canonical-source.musicxml'))
+    intent = {}
+    try:
+        with open(os.path.join(job_dir, 'request.json'), encoding='utf-8') as stream:
+            request = json.load(stream)
+        intent = request.get('intent') or {}
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return {'revision': digest,
+            'sourceRevision': file_digest(source_path) if source_path else None,
+            'editBasis': 'canonical_source' if source_path else 'target_legacy',
+            'canRetarget': bool(source_path and intent.get('mode') == 'instrument_rewrite'),
+            'sourceInstrument': intent.get('sourceInstrument'),
+            'targetInstrument': intent.get('targetInstrument'),
+            'measures': measures, 'verified': False,
             'structureGaps': structure_gaps, 'restSuggestions': rest_suggestions,
-            'scope': '目标谱音高、升降号和八度；保持时值及小节结构'}
+            'scope': ('目标谱界面修改会回写源谱并重新执行确定性转调'
+                      if source_path else
+                      '旧版任务只修改目标谱；保持时值及小节结构')}
 
 
 def carry_rest_review(parent_dir, child_dir, resolved_gap_ids):

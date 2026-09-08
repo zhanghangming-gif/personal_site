@@ -58,6 +58,9 @@ from score_ir import score_ir
 from score_rhythm_gaps import detect_rhythm_gaps
 from score_editor import (candidate_info, editor_data, apply_edits, report_text,
                           regular_file, carry_rest_review)
+from score_source_versions import (assert_target_pitch_changes,
+                                   canonical_source_musicxml,
+                                   target_pitch_changes_to_source)
 from score_auto_repair import (
     apply_safe_rhythm_repairs, validate_repair_result,
     validate_source_repair_result,
@@ -67,8 +70,8 @@ from score_omr_options import (
     recognition_attempt, recognition_decision, recognition_consensus,
 )
 from rest_annotation_admin import (
-    build_training_archive, list_samples, refresh_samples, sample_image_path,
-    update_sample,
+    build_training_archive, list_samples, load_excluded_document_hashes,
+    refresh_samples, sample_image_path, update_sample,
 )
 
 
@@ -90,6 +93,16 @@ REST_ANNOTATION_EXPORTER = os.environ.get(
 )
 REST_ANNOTATION_PYTHON = os.environ.get(
     "REST_ANNOTATION_PYTHON", os.environ.get("SCORE_SKILL_PYTHON", "python3"))
+_EVALUATION_MANIFEST_CANDIDATES = (
+    os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                 "benchmarks", "score-blind", "manifest.json"),
+    os.path.join(os.path.dirname(__file__),
+                 "benchmarks", "score-blind", "manifest.json"),
+)
+SCORE_EVALUATION_MANIFEST = os.environ.get(
+    "SCORE_EVALUATION_MANIFEST",
+    next((path for path in _EVALUATION_MANIFEST_CANDIDATES if os.path.isfile(path)),
+         _EVALUATION_MANIFEST_CANDIDATES[0]))
 HOST = os.environ.get("MESSAGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MESSAGE_PORT", "8787"))
 IP_HASH_SALT = os.environ.get("MESSAGE_IP_HASH_SALT", "development-only-change-me")
@@ -116,7 +129,7 @@ ADMIN_REST_SAMPLE_RE = re.compile(r"^/api/admin/rest-annotations/([0-9a-f]{24})$
 ADMIN_REST_IMAGE_RE = re.compile(r"^/api/admin/rest-annotations/([0-9a-f]{24})/image$", re.I)
 SCORE_STATUS_RE = re.compile(r"^/api/score/transpositions/([0-9a-f-]{36})$", re.I)
 SCORE_OUTPUT_RE = re.compile(r"^/api/score/transpositions/([0-9a-f-]{36})/output$", re.I)
-SCORE_REVIEW_RE = re.compile(r"^/api/score/transpositions/([0-9a-f-]{36})/(candidate|review-report|editor|edits|musicxml|original|inspection|page-image|region-image)$", re.I)
+SCORE_REVIEW_RE = re.compile(r"^/api/score/transpositions/([0-9a-f-]{36})/(candidate|review-report|editor|edits|retarget|musicxml|original|inspection|page-image|region-image)$", re.I)
 INSTRUMENT_OFFSETS = {
     "concert_c": 0,
     "piccolo": 12,
@@ -4138,6 +4151,17 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
         if musicxml != source_before_rhythm_repair:
             workspace.register_artifact("canonical-source-repaired", musicxml)
 
+    # Persist the exact source MusicXML used for deterministic transposition.
+    # Canonical JSON remains the semantic contract; this lossless XML version is
+    # the editable source for later human corrections and target regeneration.
+    canonical_source_xml = os.path.join(
+        job_dir, "scores", "source", "canonical-source.musicxml")
+    os.makedirs(os.path.dirname(canonical_source_xml), exist_ok=True)
+    shutil.copyfile(musicxml, canonical_source_xml)
+    musicxml = canonical_source_xml
+    if os.path.isfile(workspace.manifest_path):
+        workspace.register_artifact("canonical-source-musicxml", musicxml)
+
     progress("transposing", "正在计算目标音高并处理临时变音", 58)
     transposed = os.path.join(job_dir, "transposed.musicxml")
     summary = transpose_musicxml(musicxml, transposed, semitones, accidental_preference, source_instrument, target_instrument)
@@ -4674,6 +4698,7 @@ def process_score_job(job_id, request, progress):
         contract_artifacts = {
             "evidence-graph": ("evidence/evidence-graph.json", "evidenceGraph"),
             "canonical-source-score": ("scores/source/canonical-score.json", "canonicalSourceScore"),
+            "canonical-source-musicxml": ("scores/source/canonical-source.musicxml", None),
             "target-score": ("scores/target/target-score.json", "targetScore"),
             "source-layout-map": ("layout/source/source-layout-map.json", "sourceLayoutMap"),
             "target-layout-map": ("layout/target/target-layout-map.json", "targetLayoutMap"),
@@ -4688,7 +4713,12 @@ def process_score_job(job_id, request, progress):
             workspace.register_artifact(
                 role, os.path.join(job_dir, *relative.split("/")), contract)
         source_version = workspace.register_score_version(
-            "canonical_source", os.path.join(job_dir, "scores", "source", "canonical-score.json"))
+            "canonical_source_musicxml",
+            os.path.join(job_dir, "scores", "source", "canonical-source.musicxml"))
+        workspace.register_score_version(
+            "canonical_source_contract",
+            os.path.join(job_dir, "scores", "source", "canonical-score.json"),
+            source_version.get("versionId") if source_version else None)
         workspace.register_score_version(
             "target_transposed", os.path.join(job_dir, "scores", "target", "target-score.json"),
             source_version.get("versionId") if source_version else None,
@@ -4739,8 +4769,10 @@ def process_score_edit(job_id, request, progress):
     parent = read_pipeline_report(parent_dir).get("verification", {})
     source_pdf = os.path.join(job_dir, "input.pdf")
     xml_path = os.path.join(job_dir, "transposed.musicxml")
+    source_xml = canonical_source_musicxml(job_dir)
     output = os.path.join(job_dir, "output.pdf")
-    progress("rendering", "正在生成修改后的 PDF", 65)
+    progress("rendering", ("正在使用校正版源谱生成新的目标乐器谱"
+                           if request.get("retarget") else "正在生成修改后的 PDF"), 65)
     count, layout = render_preserved_score_pdf(find_musescore_command(), xml_path, output, source_pdf,
                                               job_dir, 180, "人工校谱导出", omr_analysis=parent.get("omr", {}))
     audit = layout["renderAudit"]
@@ -4758,20 +4790,59 @@ def process_score_edit(job_id, request, progress):
         {"id": "source_music_evidence", "label": "原谱逐音核对", "passed": False,
          "detail": "本版包含人工修改，仍需对照原谱核对全部内容"}]
     verification = {"status": "failed", "strict": False, "checks": checks,
-                    "summary": "人工修改已生成候选 PDF，请核对修改位置及其相邻音符。",
+                    "summary": ("已使用校正版源谱生成新的目标乐器谱，请核对候选 PDF。"
+                                if request.get("retarget") else
+                                "人工修改已生成候选 PDF，请核对修改位置及其相邻音符。"),
                     "issues": details.get("issues", []), "issueCount": details.get("issueCount", 0),
                     "manualEdits": request["changes"], "parentJobId": request["parentJobId"],
                     "omr": parent.get("omr", {}), "layout": layout}
+    if request.get("sourceBasedEdit") and source_xml:
+        interval = (request.get("intent") or {}).get("interval") or {}
+        instrument_mode = (request.get("intent") or {}).get("mode") == "instrument_rewrite"
+        review = write_score_review(
+            job_dir, source_pdf, source_xml, xml_path,
+            layout.get("renderedMusicxml"), read_musicxml_root,
+            interval.get("chromaticSemitones", 0),
+            ((request.get("intent") or {}).get("spellingPolicy") or {}).get(
+                "accidentalPreference", "auto"),
+            (request.get("intent") or {}).get("sourceInstrument") if instrument_mode else None,
+            (request.get("intent") or {}).get("targetInstrument") if instrument_mode else None,
+            output_pdf=output, original_xml=source_xml,
+            omr_analysis=parent.get("omr", {}), preflight=parent.get("preflight", {}),
+            intent=request.get("intent"),
+            omr_book=newest_omr_file(os.path.join(parent_dir, "omr")))
+        attach_review(verification, review)
+        verification["sourceEdit"] = {
+            "basis": "canonical_source_musicxml",
+            "sourceRegenerated": True,
+            "targetRegenerated": True,
+            "reusableForNewTargets": True,
+        }
+        verification["summary"] = ("已复用校正版源谱并重新转调生成候选 PDF，请核对目标乐器和谱面。"
+                                   if request.get("retarget") else
+                                   "源谱修正已写入并重新转调生成候选 PDF，请核对修改位置及相邻内容。")
     pipeline = PipelineStatus("needs_review", PIPELINE_NEEDS_REVIEW, warnings=[verification["summary"]], output_allowed=False)
     verification["pipeline"] = pipeline.to_dict()
     write_pipeline_report(job_dir, pipeline, verification, {"output": pdf_artifact_descriptor(output)})
     workspace.register_artifact("candidate-pdf", output)
     workspace.register_artifact("candidate-musicxml", xml_path)
+    if source_xml:
+        workspace.register_artifact("canonical-source-musicxml", source_xml)
+    for role, relative, contract in (
+            ("canonical-source-score", "scores/source/canonical-score.json", "canonicalSourceScore"),
+            ("target-score", "scores/target/target-score.json", "targetScore"),
+            ("evidence-graph", "evidence/evidence-graph.json", "evidenceGraph"),
+            ("source-layout-map", "layout/source/source-layout-map.json", "sourceLayoutMap"),
+            ("target-layout-map", "layout/target/target-layout-map.json", "targetLayoutMap"),
+            ("transformation-proof", "review/transformation-proof.json", "transformationProof")):
+        workspace.register_artifact(
+            role, os.path.join(job_dir, *relative.split("/")), contract)
     workspace.update_stage("needs_review", verification["summary"], 100)
     signature = score_signature(xml_path)
     return {"jobId": job_id, "status": "needs_review", "stage": "needs_review", "progress": 100,
             "outputAllowed": False, "outputUrl": "", "pipelineStatus": PIPELINE_NEEDS_REVIEW,
-            "fileName": "人工修改-" + request.get("name", "score.pdf"), "verification": verification,
+            "fileName": (("重新转调-" if request.get("retarget") else "人工修改-") +
+                         request.get("name", "score.pdf")), "verification": verification,
             "message": verification["summary"], "warnings": [verification["summary"]],
             "summary": dict(request.get("summary", {}), noteEvents=signature["noteCount"],
                             measures=signature["measureCount"], sourcePages=source_pages,
@@ -4879,7 +4950,7 @@ class Handler(BaseHTTPRequestHandler):
         if match:
             return self.get_score_output(match.group(1))
         match = SCORE_REVIEW_RE.match(parsed.path)
-        if match and match.group(2) != "edits":
+        if match and match.group(2) not in ("edits", "retarget"):
             return self.get_score_review_asset(match.group(1), match.group(2), parse_qs(parsed.query))
         return self.json_response(404, {"success": False, "message": "接口不存在"})
 
@@ -4897,6 +4968,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/score/transpositions": return self.create_score_transposition()
             match = SCORE_REVIEW_RE.match(path)
             if match and match.group(2) == "edits": return self.create_score_edits(match.group(1))
+            if match and match.group(2) == "retarget": return self.create_score_retarget(match.group(1))
             if path == "/api/admin/upload":
                 if self.require_admin(): return self.upload()
                 return
@@ -5270,7 +5342,8 @@ class Handler(BaseHTTPRequestHandler):
     def export_rest_annotations(self):
         archive = None
         try:
-            archive = build_training_archive(REST_ANNOTATION_DIR)
+            excluded = load_excluded_document_hashes(SCORE_EVALUATION_MANIFEST)
+            archive = build_training_archive(REST_ANNOTATION_DIR, excluded)
             size = os.path.getsize(archive)
             self.send_response(200)
             self.send_header("Content-Type", "application/zip")
@@ -5480,23 +5553,11 @@ class Handler(BaseHTTPRequestHandler):
         xml_path = regular_file(parent_dir, "transposed.musicxml")
         if not xml_path or data["revision"] != file_sha256(xml_path):
             raise ValueError("乐谱版本已变化，请重新打开编辑器")
-        root = read_musicxml_root(xml_path)
+        target_root = read_musicxml_root(xml_path)
         current_editor = editor_data(parent_dir, read_musicxml_root)
         rest_confirmations = {item.get("gapId"): item
                               for item in current_editor.get("restSuggestions", [])
                               if item.get("gapId")}
-        changes = apply_edits(root, data["changes"], rest_confirmations)
-        with connect() as db:
-            if not rate_allowed(db, "score_edit", self.client_hash(), limit=6, window=300):
-                raise ValueError("保存过于频繁，请稍后再试；可先集中修改多个音符再保存")
-        job_id = str(uuid.uuid4())
-        directory = os.path.join(SCORE_DIR, job_id)
-        os.makedirs(directory)
-        shutil.copyfile(os.path.join(parent_dir, "input.pdf"), os.path.join(directory, "input.pdf"))
-        ET.ElementTree(root).write(os.path.join(directory, "transposed.musicxml"), encoding="utf-8", xml_declaration=True)
-        carry_rest_review(parent_dir, directory,
-                          [item.get("gapId") for item in changes
-                           if item.get("type") == "confirmRest"])
         try:
             with open(os.path.join(parent_dir, "request.json"), encoding="utf-8") as stream:
                 parent_request = json.load(stream)
@@ -5521,23 +5582,186 @@ class Handler(BaseHTTPRequestHandler):
                     "accidentalPreference": "auto",
                 }
             intent = build_transposition_intent(parent_request)
-        request = {"manualEdit": True, "parentJobId": parent_id, "changes": changes,
+
+        source_path = canonical_source_musicxml(parent_dir)
+        source_root = read_musicxml_root(source_path) if source_path else None
+        target_preview = copy.deepcopy(target_root)
+        # Validate the user's visible target edit first.  The same server-side
+        # rest evidence and tie rules therefore apply to both old and new jobs.
+        changes = apply_edits(target_preview, data["changes"], rest_confirmations)
+        source_changes = None
+        source_based = source_root is not None
+        if source_based:
+            pitch_only = all(isinstance(item, dict) and
+                             set(item) == {"eventId", "pitch"}
+                             for item in data["changes"])
+            source_changes = (target_pitch_changes_to_source(
+                source_root, target_root, data["changes"],
+                (intent.get("interval") or {}).get("chromaticSemitones", 0))
+                if pitch_only else data["changes"])
+            apply_edits(source_root, source_changes, rest_confirmations)
+
+        with connect() as db:
+            if not rate_allowed(db, "score_edit", self.client_hash(), limit=6, window=300):
+                raise ValueError("保存过于频繁，请稍后再试；可先集中修改多个音符再保存")
+        job_id = str(uuid.uuid4())
+        directory = os.path.join(SCORE_DIR, job_id)
+        os.makedirs(directory)
+        shutil.copyfile(os.path.join(parent_dir, "input.pdf"), os.path.join(directory, "input.pdf"))
+        target_output = os.path.join(directory, "transposed.musicxml")
+        source_output = os.path.join(directory, "scores", "source", "canonical-source.musicxml")
+        if source_based:
+            os.makedirs(os.path.dirname(source_output), exist_ok=True)
+            ET.ElementTree(source_root).write(
+                source_output, encoding="utf-8", xml_declaration=True)
+            interval = intent.get("interval") or {}
+            instrument_mode = intent.get("mode") == "instrument_rewrite"
+            try:
+                transpose_musicxml(
+                    source_output, target_output, interval.get("chromaticSemitones", 0),
+                    (intent.get("spellingPolicy") or {}).get("accidentalPreference", "auto"),
+                    intent.get("sourceInstrument") if instrument_mode else None,
+                    intent.get("targetInstrument") if instrument_mode else None)
+            except RuntimeError as exc:
+                raise ValueError("源谱修正已验证，但重新生成目标谱失败：%s" % exc)
+            assert_target_pitch_changes(read_musicxml_root(target_output), data["changes"])
+        else:
+            ET.ElementTree(target_preview).write(
+                target_output, encoding="utf-8", xml_declaration=True)
+
+        resolved_gap_ids = [item.get("gapId") for item in changes
+                            if item.get("type") == "confirmRest"]
+        if any(item.get("type") == "insertRests" for item in changes):
+            # Structural insertion changes later measure IDs, so old source
+            # review coordinates cannot be attached to the child version.
+            resolved_gap_ids = list(rest_confirmations)
+        carry_rest_review(parent_dir, directory, resolved_gap_ids)
+        request = {"manualEdit": True, "sourceBasedEdit": source_based,
+                   "parentJobId": parent_id, "changes": changes,
+                   "sourceChanges": source_changes if source_based else None,
                    "name": parent.get("fileName", "score.pdf"), "summary": parent.get("summary", {}),
                    "intent": intent}
         workspace = ScoreWorkspace(directory)
         workspace.initialize(job_id, os.path.join(directory, "input.pdf"), request, intent)
-        workspace.register_score_version(
-            "manual_target_musicxml", os.path.join(directory, "transposed.musicxml"), None,
-            {"parentJobId": parent_id, "sourceRevision": data["revision"]},
-        )
-        workspace.record_patch({"kind": "manual_music_edit", "parentJobId": parent_id,
-                                "sourceRevision": data["revision"], "changes": changes})
+        parent_source_version = None
+        try:
+            parent_manifest = ScoreWorkspace(parent_dir).read()
+            parent_source_version = next((item.get("versionId")
+                                          for item in reversed(parent_manifest.get("scoreVersions", []))
+                                          if item.get("role") == "canonical_source_musicxml"), None)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        if source_based:
+            source_version = workspace.register_score_version(
+                "canonical_source_musicxml", source_output, parent_source_version,
+                {"parentJobId": parent_id, "parentSourceSha256": current_editor.get("sourceRevision")})
+            workspace.register_artifact("canonical-source-musicxml", source_output)
+            workspace.register_score_version(
+                "target_transposed", target_output,
+                source_version.get("versionId") if source_version else None,
+                {"parentJobId": parent_id, "intentId": intent.get("intentId")})
+        else:
+            workspace.register_score_version(
+                "manual_target_musicxml", target_output, None,
+                {"parentJobId": parent_id, "sourceRevision": data["revision"]})
+        workspace.register_artifact("candidate-musicxml", target_output)
+        workspace.record_patch({"kind": "manual_source_edit" if source_based else "manual_music_edit",
+                                "parentJobId": parent_id,
+                                "targetRevision": data["revision"],
+                                "sourceRevision": current_editor.get("sourceRevision"),
+                                "changes": changes, "sourceChanges": source_changes})
+        with open(os.path.join(directory, "request.json"), "w", encoding="utf-8") as stream:
+            json.dump(request, stream, ensure_ascii=False, indent=2)
         with open(os.path.join(directory, "edit-history.json"), "w", encoding="utf-8") as stream:
-            json.dump(dict(request, sourceRevision=data["revision"]), stream, ensure_ascii=False, indent=2)
+            json.dump(dict(request, targetRevision=data["revision"],
+                           sourceRevision=current_editor.get("sourceRevision")),
+                      stream, ensure_ascii=False, indent=2)
         try:
             result = SCORE_JOBS.submit(job_id, request)
         except QueueFull:
             return self.json_response(429, {"success": False, "message": "当前处理队列已满，请稍后保存"})
+        return self.json_response(202, {"success": True, "data": result})
+
+    def create_score_retarget(self, parent_id):
+        parent = SCORE_JOBS.read(parent_id)
+        if not parent or parent.get("status") in ("queued", "processing"):
+            raise ValueError("任务不存在或尚未完成")
+        data = self.body(16 * 1024)
+        if (not isinstance(data, dict) or
+                set(data) not in ({"targetInstrument"},
+                                  {"targetInstrument", "accidentalPreference"})):
+            raise ValueError("重新转调请求格式无效")
+        parent_dir = os.path.join(SCORE_DIR, parent_id)
+        source_xml = canonical_source_musicxml(parent_dir)
+        if not source_xml:
+            raise ValueError("这份旧任务没有可复用的校正版源谱，请重新上传原谱")
+        try:
+            parent_manifest = ScoreWorkspace(parent_dir).read()
+            parent_intent = parent_manifest.get("intent") or {}
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            parent_intent = {}
+        source = parent_intent.get("sourceInstrument")
+        target = data.get("targetInstrument")
+        if (parent_intent.get("mode") != "instrument_rewrite" or source not in INSTRUMENT_OFFSETS):
+            raise ValueError("自定义音程任务暂不能按乐器重新转调")
+        if target not in INSTRUMENT_OFFSETS:
+            raise ValueError("请选择有效的目标乐器")
+        accidental = data.get("accidentalPreference", "auto")
+        if accidental not in ("auto", "sharps", "flats"):
+            raise ValueError("升降号偏好无效")
+        semitones = INSTRUMENT_OFFSETS[source] - INSTRUMENT_OFFSETS[target]
+        request = {
+            "manualEdit": True, "retarget": True, "sourceBasedEdit": True,
+            "parentJobId": parent_id, "changes": [], "sourceChanges": [],
+            "name": parent.get("fileName", "score.pdf"),
+            "summary": dict(parent.get("summary", {}), sourceInstrument=source,
+                            targetInstrument=target, semitones=semitones,
+                            transposeMode="instrument"),
+            "transposeMode": "instrument", "sourceInstrument": source,
+            "targetInstrument": target, "semitones": semitones,
+            "accidentalPreference": accidental,
+        }
+        request["intent"] = build_transposition_intent(request)
+        with connect() as db:
+            if not rate_allowed(db, "score_edit", self.client_hash(), limit=6, window=300):
+                raise ValueError("保存过于频繁，请稍后再试")
+        job_id = str(uuid.uuid4())
+        directory = os.path.join(SCORE_DIR, job_id)
+        os.makedirs(os.path.join(directory, "scores", "source"))
+        shutil.copyfile(os.path.join(parent_dir, "input.pdf"), os.path.join(directory, "input.pdf"))
+        child_source = os.path.join(directory, "scores", "source", "canonical-source.musicxml")
+        child_target = os.path.join(directory, "transposed.musicxml")
+        shutil.copyfile(source_xml, child_source)
+        try:
+            transpose_musicxml(source_xml, child_target, semitones, accidental,
+                               source, target)
+        except RuntimeError as exc:
+            raise ValueError("从校正版源谱生成目标谱失败：%s" % exc)
+        carry_rest_review(parent_dir, directory, [])
+        workspace = ScoreWorkspace(directory)
+        workspace.initialize(job_id, os.path.join(directory, "input.pdf"),
+                             request, request["intent"])
+        source_version = workspace.register_score_version(
+            "canonical_source_musicxml", child_source, None,
+            {"parentJobId": parent_id, "reusedWithoutRecognition": True})
+        workspace.register_score_version(
+            "target_transposed", child_target,
+            source_version.get("versionId") if source_version else None,
+            {"parentJobId": parent_id, "intentId": request["intent"].get("intentId")})
+        workspace.register_artifact("canonical-source-musicxml", child_source)
+        workspace.register_artifact("candidate-musicxml", child_target)
+        workspace.record_patch({"kind": "retarget_from_canonical_source",
+                                "parentJobId": parent_id,
+                                "targetInstrument": target,
+                                "semitones": semitones})
+        for filename in ("request.json", "edit-history.json"):
+            with open(os.path.join(directory, filename), "w", encoding="utf-8") as stream:
+                json.dump(request, stream, ensure_ascii=False, indent=2)
+        try:
+            result = SCORE_JOBS.submit(job_id, request)
+        except QueueFull:
+            return self.json_response(429, {"success": False,
+                                            "message": "当前处理队列已满，请稍后重试"})
         return self.json_response(202, {"success": True, "data": result})
 
     def create_score_transposition(self):

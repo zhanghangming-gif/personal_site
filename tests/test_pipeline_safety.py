@@ -167,7 +167,9 @@ def test_repair_failure_continues_original_as_unverified_candidate(api, monkeypa
 
     def transpose(*args, **kwargs):
         calls["transpose"] = True
-        assert args[0] == str(musicxml)
+        canonical = tmp_path / "scores" / "source" / "canonical-source.musicxml"
+        assert args[0] == str(canonical)
+        assert canonical.read_bytes() == musicxml.read_bytes()
         Path(args[1]).write_bytes(musicxml.read_bytes())
         return {}
 

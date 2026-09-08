@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 
 from rest_annotation_admin import (  # noqa: E402
     _assign_document_splits, _balanced_review_order, build_training_archive, list_samples,
-    sample_image_path, update_sample,
+    load_excluded_document_hashes, sample_image_path, update_sample,
 )
 
 
@@ -124,6 +124,37 @@ def test_coco_export_contains_only_reviewed_images_and_no_pdf(tmp_path):
             payload = json.loads(bundle.read(split_file))
             assert len(payload['images']) == 1 and payload['annotations'] == []
             assert payload['images'][0]['document_sha256'] == '1' * 64
+    finally:
+        os.unlink(archive)
+
+
+def test_evaluation_documents_are_excluded_from_training_archive(tmp_path):
+    record = seed_dataset(tmp_path)
+    record['state'] = 'rejected'
+    record['annotation'] = {'targets': [], 'reason': 'hard negative'}
+    second = dict(record)
+    second['sampleId'] = 'b' * 24
+    second['documentSha256'] = '2' * 64
+    second['image'] = 'images/second.png'
+    Image.new('RGB', (200, 100), 'gray').save(str(tmp_path / 'images' / 'second.png'))
+    (tmp_path / 'queue.jsonl').write_text(
+        json.dumps(record) + '\n' + json.dumps(second) + '\n', encoding='utf-8')
+    manifest_path = tmp_path / 'evaluation.json'
+    manifest_path.write_text(json.dumps({
+        'trainingPolicy': 'exclude_all_cases',
+        'cases': [{'sha256': '1' * 64}],
+    }), encoding='utf-8')
+    excluded = load_excluded_document_hashes(str(manifest_path))
+    archive = build_training_archive(str(tmp_path), excluded)
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            manifest = json.loads(bundle.read('dataset-manifest.json'))
+            images = [image for split in ('train', 'validation', 'test')
+                      for image in json.loads(bundle.read(
+                          'annotations/%s.json' % split))['images']]
+            assert {item['document_sha256'] for item in images} == {'2' * 64}
+            assert manifest['excludedEvaluationSampleCount'] == 1
+            assert manifest['evaluationDocumentsExcluded'] == 1
     finally:
         os.unlink(archive)
 

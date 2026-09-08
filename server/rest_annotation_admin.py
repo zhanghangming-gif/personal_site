@@ -386,7 +386,24 @@ def _assign_document_splits(records):
     return result
 
 
-def build_training_archive(dataset_dir):
+def load_excluded_document_hashes(manifest_path):
+    """Read immutable evaluation document hashes without requiring the PDFs."""
+    if not manifest_path or not os.path.isfile(manifest_path):
+        return set()
+    with open(manifest_path, encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    if (not isinstance(manifest, dict) or
+            manifest.get("trainingPolicy") != "exclude_all_cases"):
+        raise ValueError("固定评测清单没有声明训练隔离")
+    result = set()
+    for item in manifest.get("cases") or []:
+        digest = str(item.get("sha256") or "").lower() if isinstance(item, dict) else ""
+        if len(digest) == 64 and all(character in "0123456789abcdef" for character in digest):
+            result.add(digest)
+    return result
+
+
+def build_training_archive(dataset_dir, excluded_document_hashes=None):
     """Build a temporary COCO zip from reviewed samples only."""
     with _LOCK:
         records = [item for item in _read_records(dataset_dir)
@@ -394,6 +411,13 @@ def build_training_archive(dataset_dir):
         if not records:
             raise ValueError("还没有可导出的人工确认样本")
         reviewed_count = len(records)
+        excluded = set(excluded_document_hashes or ())
+        excluded_sample_count = sum(
+            (item.get("documentSha256") or "").lower() in excluded for item in records)
+        records = [item for item in records
+                   if (item.get("documentSha256") or "").lower() not in excluded]
+        if not records:
+            raise ValueError("人工确认样本均属于固定评测集，不能导入训练")
         records, duplicate_count, conflict_count = _deduplicate_training_records(dataset_dir, records)
         document_splits = _assign_document_splits(records)
         descriptor, archive_path = tempfile.mkstemp(prefix="rest-training-", suffix=".zip")
@@ -440,6 +464,8 @@ def build_training_archive(dataset_dir):
                     "schemaVersion": 2, "createdAt": _utcnow(),
                     "sampleCount": len(records),
                     "reviewedSampleCount": reviewed_count,
+                    "excludedEvaluationSampleCount": excluded_sample_count,
+                    "evaluationDocumentsExcluded": len(excluded),
                     "duplicateSampleCount": duplicate_count,
                     "conflictingDuplicateGroupCount": conflict_count,
                     "documentCount": len(set(item.get("documentSha256") for item in records)),

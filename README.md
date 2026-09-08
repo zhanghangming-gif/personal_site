@@ -53,10 +53,11 @@ cp server/.env.example server/.env
 
 1. PDF 预检和多分辨率渲染。
 2. Audiveris OMR 与 MusicXML 结构修复。
-3. 确定性音高转调。
-4. MuseScore 生成候选 PDF。
-5. 音符、节奏、休止符、小节数和排版复核。
-6. 高置信休止符候选经用户查看原谱局部并确认后，生成新的 MusicXML 和 PDF 版本。
+3. 源谱节奏缺口检查和安全修复，形成可版本化的校正版源谱。
+4. 确定性音高转调。
+5. MuseScore 生成候选 PDF。
+6. 音符、节奏、休止符、小节数和排版复核。
+7. 人工修正先回写源谱，再重新转调生成目标版本；同一校正版源谱可生成其他目标乐器谱。
 
 架构细节见 `server/SCORE_COMPILER_ARCHITECTURE.md`，编辑约束见 `server/README-score-editor.md`。
 

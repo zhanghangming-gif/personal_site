@@ -13,10 +13,12 @@ import time
 import traceback
 
 from message_api import (
+    get_pdf_page_count,
     inspect_rendered_score_pdf, inspect_score_pdf, preflight_pdf,
     prepare_omr_variant, preserve_score_headers, process_score_pdf,
     read_pipeline_report, write_pipeline_report,
 )
+from score_benchmark import (attach_evaluation, directory_cases, load_manifest)
 
 
 def write_json(path, payload):
@@ -38,24 +40,42 @@ def failure_categories(report):
     return sorted(set(categories))
 
 
-def run(input_dir, output_dir, limit=0):
+def safe_page_count(path):
+    try:
+        return get_pdf_page_count(path)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def run(input_dir, output_dir, limit=0, manifest_path=None, baseline_path=None,
+        case_ids=None):
     os.makedirs(output_dir, exist_ok=True)
-    paths = [
-        os.path.join(input_dir, name) for name in sorted(os.listdir(input_dir))
-        if name.lower().endswith(".pdf") and os.path.isfile(os.path.join(input_dir, name))
-    ]
+    manifest, cases = (load_manifest(input_dir, manifest_path)
+                       if manifest_path else (None, directory_cases(input_dir)))
+    if case_ids:
+        selected = set(case_ids)
+        known = set(case["caseId"] for case in cases)
+        unknown = sorted(selected - known)
+        if unknown:
+            raise ValueError("评测案例不存在：%s" % ", ".join(unknown))
+        cases = [case for case in cases if case["caseId"] in selected]
     if limit:
-        paths = paths[:limit]
-    aggregate = {"schemaVersion": 1, "startedAt": time.time(), "inputCount": len(paths), "results": []}
+        cases = cases[:limit]
+    aggregate = {"schemaVersion": 2, "startedAt": time.time(),
+                 "inputCount": len(cases), "manifest": manifest_path, "results": []}
     summary_path = os.path.join(output_dir, "regression-report.json")
-    for index, source in enumerate(paths, 1):
+    for index, case in enumerate(cases, 1):
+        source = case["path"]
         stem = "%03d" % index
         workspace = os.path.join(output_dir, stem)
         os.makedirs(workspace, exist_ok=True)
         copied = os.path.join(workspace, "input.pdf")
         shutil.copyfile(source, copied)
         started = time.time()
-        row = {"index": index, "name": os.path.basename(source), "workspace": stem}
+        row = {"index": index, "caseId": case["caseId"],
+               "name": os.path.basename(source), "workspace": stem,
+               "sourceSha256": case["sha256"], "tags": case["tags"],
+               "metadata": case["metadata"]}
         try:
             prepared, preflight = preflight_pdf(copied, workspace)
             try:
@@ -68,10 +88,13 @@ def run(input_dir, output_dir, limit=0):
                     omr_variant, _variant_report = prepare_omr_variant(copied, workspace, 300)
                 except (RuntimeError, OSError, ValueError):
                     omr_variant = None
+            request = case.get("request") or {}
             output_pdf, _summary, verification = process_score_pdf(
-                prepared, workspace, 0, "auto", preflight=preflight,
-                inspection=inspection, omr_variant=omr_variant,
-            )
+                prepared, workspace, int(request.get("semitones", 0)),
+                request.get("accidentalPreference", "auto"),
+                source_instrument=request.get("sourceInstrument"),
+                target_instrument=request.get("targetInstrument"),
+                preflight=preflight, inspection=inspection, omr_variant=omr_variant)
             try:
                 inspect_rendered_score_pdf(
                     output_pdf, workspace, (_summary or {}).get("outputPages") or 1)
@@ -125,6 +148,14 @@ def run(input_dir, output_dir, limit=0):
                 "stage": pipeline.get("stage", ""),
                 "outputAvailable": os.path.isfile(os.path.join(workspace, "output.pdf")),
                 "failureCategories": failure_categories(report),
+                "sourceMetrics": {
+                    "pages": safe_page_count(copied),
+                    "documentType": (inspection.get("scoreProfile") or {}).get("documentType"),
+                },
+                "staticContent": {
+                    "status": static_content.get("status"),
+                    "preservedPages": static_content.get("preservedPages"),
+                },
                 "recognition": {
                     "selectedAttemptId": decision.get("selectedAttemptId"),
                     "attempts": attempts,
@@ -151,6 +182,11 @@ def run(input_dir, output_dir, limit=0):
         status: sum(row.get("status") == status for row in aggregate["results"])
         for status in sorted(set(row.get("status") for row in aggregate["results"]))
     }
+    baseline = None
+    if baseline_path:
+        with open(baseline_path, encoding="utf-8") as stream:
+            baseline = json.load(stream)
+    attach_evaluation(aggregate, cases, baseline)
     write_json(summary_path, aggregate)
     return aggregate
 
@@ -160,8 +196,22 @@ def main():
     parser.add_argument("input_dir")
     parser.add_argument("output_dir")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--manifest")
+    parser.add_argument("--baseline")
+    parser.add_argument("--case-id", action="append", default=[])
+    parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(run(args.input_dir, args.output_dir, args.limit), ensure_ascii=False, indent=2))
+    if args.validate_only:
+        if not args.manifest:
+            parser.error("--validate-only requires --manifest")
+        manifest, cases = load_manifest(args.input_dir, args.manifest)
+        result = {"schemaVersion": 1, "valid": True,
+                  "benchmarkId": manifest.get("benchmarkId"),
+                  "caseCount": len(cases), "caseIds": [case["caseId"] for case in cases]}
+    else:
+        result = run(args.input_dir, args.output_dir, args.limit,
+                     args.manifest, args.baseline, args.case_id)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

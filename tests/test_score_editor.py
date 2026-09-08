@@ -1,5 +1,6 @@
 import json
 import xml.etree.ElementTree as ET
+from contextlib import nullcontext
 
 import pytest
 
@@ -33,6 +34,104 @@ def test_pitch_edits_preserve_duration_rest_and_original_tree_file(api, tmp_path
     assert events[2]['kind'] == 'rest'
     assert root.find('.//accidental').text == 'flat'
     assert len(log) == 1 and len(data['revision']) == 64
+
+
+def test_editor_reports_source_based_version_and_retarget_capability(api, tmp_path):
+    from score_editor import editor_data
+    xml = tmp_path / 'transposed.musicxml'
+    ET.ElementTree(tree()).write(xml)
+    source_dir = tmp_path / 'scores' / 'source'
+    source_dir.mkdir(parents=True)
+    ET.ElementTree(tree()).write(source_dir / 'canonical-source.musicxml')
+    (tmp_path / 'request.json').write_text(json.dumps({'intent': {
+        'mode': 'instrument_rewrite', 'sourceInstrument': 'clarinet_a',
+        'targetInstrument': 'clarinet_bb',
+    }}), encoding='utf-8')
+    data = editor_data(str(tmp_path), api.read_musicxml_root)
+    assert data['editBasis'] == 'canonical_source'
+    assert data['canRetarget'] is True
+    assert data['sourceInstrument'] == 'clarinet_a'
+    assert len(data['sourceRevision']) == 64
+
+
+def test_http_edit_writes_source_then_regenerates_target(api, tmp_path, monkeypatch):
+    from score_transposition import transpose_tree
+
+    parent_id = '11111111-1111-1111-1111-111111111111'
+    parent_dir = tmp_path / parent_id
+    source_dir = parent_dir / 'scores' / 'source'
+    source_dir.mkdir(parents=True)
+    source = tree()
+    ET.ElementTree(source).write(source_dir / 'canonical-source.musicxml')
+    target = tree()
+    transpose_tree(target, -1, 'auto', 'clarinet_a', 'clarinet_bb')
+    ET.ElementTree(target).write(parent_dir / 'transposed.musicxml')
+    (parent_dir / 'input.pdf').write_bytes(b'%PDF-1.4\n%%EOF')
+    request = {
+        'transposeMode': 'instrument', 'sourceInstrument': 'clarinet_a',
+        'targetInstrument': 'clarinet_bb', 'semitones': -1,
+        'accidentalPreference': 'auto',
+    }
+    request['intent'] = api.build_transposition_intent(request)
+    (parent_dir / 'request.json').write_text(json.dumps(request), encoding='utf-8')
+    revision = api.file_sha256(str(parent_dir / 'transposed.musicxml'))
+    submitted = {}
+    monkeypatch.setattr(api, 'SCORE_DIR', str(tmp_path))
+    monkeypatch.setattr(api.SCORE_JOBS, 'read', lambda _: {
+        'jobId': parent_id, 'status': 'needs_review', 'fileName': 'part.pdf',
+        'summary': {},
+    })
+    monkeypatch.setattr(api.SCORE_JOBS, 'submit',
+                        lambda job_id, body: submitted.update(jobId=job_id, request=body) or {
+                            'jobId': job_id, 'status': 'queued'})
+    monkeypatch.setattr(api, 'connect', lambda: nullcontext(object()))
+    monkeypatch.setattr(api, 'rate_allowed', lambda *_args, **_kwargs: True)
+
+    class Request:
+        def body(self, _limit):
+            return {'revision': revision, 'changes': [{
+                'eventId': 'p1-m1-n1',
+                'pitch': {'step': 'C', 'alter': 0, 'octave': 5},
+            }]}
+
+        def client_hash(self):
+            return 'test-client'
+
+        def json_response(self, status, payload):
+            return status, payload
+
+    status, _payload = api.Handler.create_score_edits(Request(), parent_id)
+    assert status == 202 and submitted['request']['sourceBasedEdit'] is True
+    child = tmp_path / submitted['jobId']
+    child_source = api.read_musicxml_root(str(
+        child / 'scores' / 'source' / 'canonical-source.musicxml'))
+    child_target = api.read_musicxml_root(str(child / 'transposed.musicxml'))
+    assert child_source.findtext('.//pitch/step') == 'D'
+    assert child_source.findtext('.//pitch/alter') == '-1'
+    assert child_target.findtext('.//pitch/step') == 'C'
+    assert child_target.findtext('.//pitch/alter') is None
+
+    corrected_id = submitted['jobId']
+
+    class RetargetRequest:
+        def body(self, _limit):
+            return {'targetInstrument': 'concert_c',
+                    'accidentalPreference': 'flats'}
+
+        def client_hash(self):
+            return 'test-client'
+
+        def json_response(self, status, payload):
+            return status, payload
+
+    status, _payload = api.Handler.create_score_retarget(
+        RetargetRequest(), corrected_id)
+    assert status == 202 and submitted['request']['retarget'] is True
+    retargeted = api.read_musicxml_root(str(
+        tmp_path / submitted['jobId'] / 'transposed.musicxml'))
+    assert retargeted.findtext('.//pitch/step') == 'B'
+    assert retargeted.findtext('.//pitch/alter') == '-1'
+    assert retargeted.findtext('.//pitch/octave') == '4'
 
 
 def test_editor_exposes_bounded_structure_gap_without_auto_applying_it(api, tmp_path):

@@ -1,8 +1,22 @@
 import { useEffect, useState } from 'react';
-import { loadScoreEditor, saveScoreEdits, type EditorScore, type EditorPitch } from '../services/scoreTransposeService';
+import { loadScoreEditor, retargetScore, saveScoreEdits, type EditorScore, type EditorPitch } from '../services/scoreTransposeService';
 
 const letters = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 const symbols: Record<number, string> = { '-2': '♭♭', '-1': '♭', '0': '♮', '1': '♯', '2': '𝄪' };
+const retargetInstruments = [
+  ['concert_c', 'C 调乐器 / 原调', 'Concert C'],
+  ['piccolo', '短笛', 'Piccolo'],
+  ['clarinet_a', 'A 调单簧管', 'A Clarinet'],
+  ['clarinet_bb', '降 B 调单簧管', 'Bb Clarinet'],
+  ['bass_clarinet_bb', '降 B 调低音单簧管', 'Bb Bass Clarinet'],
+  ['trumpet_bb', '降 B 调小号', 'Bb Trumpet'],
+  ['soprano_sax_bb', '降 B 调高音萨克斯', 'Bb Soprano Sax'],
+  ['tenor_sax_bb', '降 B 调次中音萨克斯', 'Bb Tenor Sax'],
+  ['sax_eb', '降 E 调中音萨克斯', 'Eb Alto Sax'],
+  ['baritone_sax_eb', '降 E 调上低音萨克斯', 'Eb Baritone Sax'],
+  ['horn_f', 'F 调圆号', 'F Horn'],
+  ['english_horn_f', 'F 调英国管', 'English Horn'],
+] as const;
 function pitchLabel(pitch: EditorPitch | null) {
   return pitch ? `${pitch.step}${pitch.alter ? symbols[pitch.alter] : ''}${pitch.octave}` : '休止 / 无固定音高';
 }
@@ -22,10 +36,12 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
   const [restConfirmed, setRestConfirmed] = useState(false);
   const [activeRestGap, setActiveRestGap] = useState('');
   const [eventRestConfirmed, setEventRestConfirmed] = useState(false);
+  const [retargetInstrument, setRetargetInstrument] = useState('');
+  const [retargetAccidental, setRetargetAccidental] = useState('auto');
   useEffect(() => {
     let active = true;
     void loadScoreEditor(jobId).then(data => {
-      if (active) { setScore(data); setMeasureIndex(0); setSelected(''); setEdits({}); setHistory([]); setRestPlacement('before'); setRestConfirmed(false); setActiveRestGap(''); setEventRestConfirmed(false); }
+      if (active) { setScore(data); setMeasureIndex(0); setSelected(''); setEdits({}); setHistory([]); setRestPlacement('before'); setRestConfirmed(false); setActiveRestGap(''); setEventRestConfirmed(false); setRetargetInstrument(data.targetInstrument ?? ''); setRetargetAccidental('auto'); }
     }).catch((e: unknown) => { if (active) setError(e instanceof Error ? e.message : '加载失败'); });
     return () => { active = false; };
   }, [jobId]);
@@ -65,6 +81,15 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
     } catch (e) { setError(e instanceof Error ? e.message : '保存失败'); }
     finally { setSaving(false); }
   }
+  async function createRetarget() {
+    if (!score?.canRetarget || !retargetInstrument || count || saving || disabled) return;
+    setSaving(true); setError('');
+    try {
+      const job = await retargetScore(jobId, retargetInstrument, retargetAccidental);
+      onSaved(job.jobId);
+    } catch (e) { setError(e instanceof Error ? e.message : '重新转调失败'); }
+    finally { setSaving(false); }
+  }
   function focusMeasure(measureId: string, missingMeasures?: number) {
     if (!score) return;
     const index = score.measures.findIndex(item => item.id === measureId);
@@ -76,7 +101,7 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
   return <section className="surface rounded-2xl p-5">
     <h2 className="text-xl font-black">{en ? 'Edit score' : '在线校谱 · 音高与空拍小节'}</h2>
     <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-300">
-      {en ? 'Edit pitches or insert missing empty bars before or after a selected measure, then generate a new PDF.' : '可以修改音高，也可以选择小节位置，在它之前或之后补入空拍小节，再生成新版 PDF。'}
+      {en ? 'Edit pitches or insert missing empty bars, then regenerate the target from the corrected source score.' : '可以修改音高或补入空拍小节。新任务会先保存校正版源谱，再重新转调生成目标 PDF。'}
     </p>
     <p className="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-300">
       {en ? 'The diagram shows pitches only. You can also insert confirmed whole-bar rests in a single-staff part. Other duration, note and notation edits require a MusicXML editor.' : '下方是音高选择示意，完整节奏与演奏标记请看 PDF。支持单声部单谱表补入整小节休止；改时值、增删有音高的音符及连线等，请下载 MusicXML 在制谱软件中完成。'}
@@ -203,6 +228,26 @@ export function ScoreEditor({ jobId, onSaved, disabled, en }: {
         {!!count && <p className="mt-2 text-sm">{en ? 'Save or discard pitch changes before inserting bars.' : '请先保存或放弃音高修改，再补入小节。'}</p>}
         <button type="button" className="button-primary mt-3 disabled:opacity-40" disabled={!restConfirmed || !!count || saving || disabled || !Number.isInteger(restCount) || restCount < 1 || restCount > 64} onClick={() => void addRests()}>{saving ? (en ? 'Generating…' : '正在生成…') : en ? 'Repair empty bars and generate PDF' : `按原谱补入标为 ${restCount} 的空拍小节并生成 PDF`}</button>
       </div>
+      {score.canRetarget && <div className="mt-5 rounded-xl border border-blue-500/35 bg-blue-500/5 p-4">
+        <h3 className="font-bold">{en ? 'Generate another instrument version' : '用校正版源谱生成其他乐器版本'}</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-300">{en ? 'Reuse this corrected source without running score recognition again.' : '直接复用这份校正版源谱，不再重新识谱。此前确认的源谱修正会保留。'}</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="text-sm font-bold">{en ? 'Target instrument' : '目标乐器'}
+            <select className="mt-2 w-full rounded-xl border bg-[rgb(var(--surface))] p-3" value={retargetInstrument} disabled={saving || disabled || !!count} onChange={event => setRetargetInstrument(event.target.value)}>
+              {retargetInstruments.map(([id, zh, english]) => <option key={id} value={id}>{en ? english : zh}</option>)}
+            </select>
+          </label>
+          <label className="text-sm font-bold">{en ? 'Accidentals' : '升降号偏好'}
+            <select className="mt-2 w-full rounded-xl border bg-[rgb(var(--surface))] p-3" value={retargetAccidental} disabled={saving || disabled || !!count} onChange={event => setRetargetAccidental(event.target.value)}>
+              <option value="auto">{en ? 'Auto' : '自动'}</option>
+              <option value="sharps">{en ? 'Prefer sharps' : '偏向升号'}</option>
+              <option value="flats">{en ? 'Prefer flats' : '偏向降号'}</option>
+            </select>
+          </label>
+        </div>
+        {!!count && <p className="mt-2 text-sm">{en ? 'Save or discard pitch changes first.' : '请先保存或放弃当前音高修改。'}</p>}
+        <button type="button" className="button-primary mt-3 disabled:opacity-40" disabled={!retargetInstrument || !!count || saving || disabled} onClick={() => void createRetarget()}>{saving ? (en ? 'Generating…' : '正在生成…') : (en ? 'Generate from corrected source' : '从校正版源谱重新转调并生成 PDF')}</button>
+      </div>}
     </>}
   </section>;
 }
