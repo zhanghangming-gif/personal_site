@@ -34,6 +34,8 @@ def test_auto_repair_inserts_only_unique_high_grade_source_rest(api):
     root, gaps = source_tree()
     report = apply_safe_rhythm_repairs(root, gaps, classification())
     assert report['appliedCount'] == 1
+    assert '后端依据原谱对象证据' in report['applied'][0]['changes'][0]['after']
+    assert '用户' not in report['applied'][0]['changes'][0]['after']
     assert root.find('.//forward') is None
     rests = [note for note in root.findall('.//note') if note.find('rest') is not None]
     assert len(rests) == 1 and rests[0].findtext('duration') == '4'

@@ -7,7 +7,7 @@ constraints before any mutation is made.
 """
 from fractions import Fraction
 
-from score_editor import REST_TYPES, apply_edits
+from score_editor import REST_LABELS, REST_TYPES, apply_edits
 
 
 SUPPORTED = {
@@ -94,6 +94,14 @@ def apply_safe_rhythm_repairs(root, rhythm_report, classification_report,
                 root, [{"type": "confirmRest", "gapId": item["gapId"]}],
                 {item["gapId"]: suggestion},
             )
+            label = REST_LABELS.get(item["suggestedNotation"], item["suggestedNotation"])
+            for change in changes:
+                change["after"] = (
+                    "后端依据原谱对象证据，在第 %s 小节声部 %s、起点 %s 补入%s；"
+                    "已进入重新排版与复核"
+                    % ((gap.get("location") or {}).get("measure", "?"),
+                       suggestion["voice"], suggestion["onset"], label)
+                )
             applied.append({"gapId": item["gapId"], "basis": basis,
                             "notation": item.get("suggestedNotation"),
                             "changes": changes})
