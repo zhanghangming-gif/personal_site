@@ -162,10 +162,53 @@ def attach_model_review_regions(index, analysis, preflight):
     }
 
 
+def build_source_repair_evidence(job_dir, source_pdf, source_xml, read_xml,
+                                 omr_analysis=None, preflight=None, omr_book=None):
+    """Build source-only rhythm evidence before any musical transformation.
+
+    This phase deliberately has no target score or rendered PDF dependency.
+    It may locate and classify a source reconstruction gap, but the returned
+    evidence does not itself authorize a patch.
+    """
+    pdf_sha = file_digest(source_pdf)
+    source_index = score_ir(
+        read_xml(source_xml), 'canonical-source-draft', pdf_sha,
+        file_digest(source_xml))
+    attach_measure_regions(source_index, omr_analysis or {}, preflight or {})
+    attach_model_review_regions(source_index, omr_analysis or {}, preflight or {})
+    source_index_path = os.path.join(job_dir, 'source-draft-score-ir.json')
+    save_json(source_index_path, source_index)
+
+    rhythm_gaps = detect_rhythm_gaps(source_index)
+    rhythm_gap_path = os.path.join(job_dir, 'review', 'rhythm-gaps.json')
+    os.makedirs(os.path.dirname(rhythm_gap_path), exist_ok=True)
+    save_json(rhythm_gap_path, rhythm_gaps)
+    rest_classification = classify_rest_gaps(
+        rhythm_gaps, omr_book, preflight or {}) if omr_book else {
+            'schemaVersion': 1, 'engine': 'unavailable', 'classifications': [],
+            'summary': {'gapCount': len(rhythm_gaps.get('gaps', [])), 'supportedCount': 0},
+            'limits': 'OMR 工程不可用，节奏缺口需要原 PDF 视觉确认'}
+    visual_model = run_rest_model(job_dir, source_pdf, rhythm_gaps)
+    rest_classification = merge_rest_model_evidence(rest_classification, visual_model)
+    rest_classification_path = os.path.join(job_dir, 'review', 'rest-classification.json')
+    save_json(rest_classification_path, rest_classification)
+    annotate_rhythm_gaps(rhythm_gaps, rest_classification)
+    save_json(rhythm_gap_path, rhythm_gaps)
+    return {
+        'schemaVersion': 1,
+        'phase': 'source_reconstruction',
+        'sourceIndex': source_index,
+        'sourceIndexPath': source_index_path,
+        'rhythmGapDetection': rhythm_gaps,
+        'restClassification': rest_classification,
+    }
+
+
 def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml,
                        read_xml, semitones, preference='auto', source_instrument=None,
                        target_instrument=None, output_pdf=None, original_xml=None,
-                       omr_analysis=None, preflight=None, intent=None, omr_book=None):
+                       omr_analysis=None, preflight=None, intent=None, omr_book=None,
+                       source_repair_evidence=None):
     """This branch imports OMR/XML. No imported self-rating can verify the PDF."""
     spec = specification(semitones, preference, source_instrument, target_instrument)
     pdf_sha = file_digest(source_pdf)
@@ -192,17 +235,26 @@ def write_score_review(job_dir, source_pdf, source_xml, target_xml, rendered_xml
         artifacts[role] = {'name': os.path.basename(artifact), 'sha256': file_digest(artifact),
                            'musicxmlSha256': index['artifactSha256']}
         indexes[role] = index
-    rhythm_gaps = detect_rhythm_gaps(indexes['source'])
+    reusable_source_evidence = (
+        source_repair_evidence
+        and (source_repair_evidence.get('sourceIndex') or {}).get('artifactSha256')
+        == indexes['source'].get('artifactSha256')
+    )
+    rhythm_gaps = ((source_repair_evidence or {}).get('rhythmGapDetection')
+                   if reusable_source_evidence else None) or detect_rhythm_gaps(indexes['source'])
     rhythm_gap_path = os.path.join(job_dir, 'review', 'rhythm-gaps.json')
     os.makedirs(os.path.dirname(rhythm_gap_path), exist_ok=True)
     save_json(rhythm_gap_path, rhythm_gaps)
-    rest_classification = classify_rest_gaps(
-        rhythm_gaps, omr_book, preflight or {}) if omr_book else {
-            'schemaVersion': 1, 'engine': 'unavailable', 'classifications': [],
-            'summary': {'gapCount': len(rhythm_gaps.get('gaps', [])), 'supportedCount': 0},
-            'limits': 'OMR 工程不可用，节奏缺口需要原 PDF 视觉确认'}
-    visual_model = run_rest_model(job_dir, source_pdf, rhythm_gaps)
-    rest_classification = merge_rest_model_evidence(rest_classification, visual_model)
+    rest_classification = ((source_repair_evidence or {}).get('restClassification')
+                           if reusable_source_evidence else None)
+    if rest_classification is None:
+        rest_classification = classify_rest_gaps(
+            rhythm_gaps, omr_book, preflight or {}) if omr_book else {
+                'schemaVersion': 1, 'engine': 'unavailable', 'classifications': [],
+                'summary': {'gapCount': len(rhythm_gaps.get('gaps', [])), 'supportedCount': 0},
+                'limits': 'OMR 工程不可用，节奏缺口需要原 PDF 视觉确认'}
+        visual_model = run_rest_model(job_dir, source_pdf, rhythm_gaps)
+        rest_classification = merge_rest_model_evidence(rest_classification, visual_model)
     rest_classification_path = os.path.join(job_dir, 'review', 'rest-classification.json')
     save_json(rest_classification_path, rest_classification)
     annotate_rhythm_gaps(rhythm_gaps, rest_classification)
@@ -329,6 +381,18 @@ def attach_review(verification, review):
         'artifact': 'review/rest-classification.json',
         'autoRepairApplied': False,
     }
+    release_components = {
+        'sourceReconstruction': review['sourceRecognition']['status'] == 'VERIFIED',
+        'transformationProof': bool(review['transposition']['passed'] and
+                                    review.get('transformationProof', {}).get('passed')),
+        'rendererIntegrity': bool(review['renderComparison']['passed']),
+        'finalPdfVerification': review['outputPdfRecognition']['status'] == 'VERIFIED',
+    }
+    verification['releaseGate'] = {
+        'passed': all(release_components.values()),
+        'components': release_components,
+        'policy': 'source_transformation_renderer_final-pdf-and-gate-v1',
+    }
     verification['checks'].extend([
         {'id': 'rhythm_gaps', 'label': '识谱声部时间轴',
          'passed': not review.get('rhythmGapDetection', {}).get('gaps') and
@@ -346,7 +410,12 @@ def attach_review(verification, review):
         {'id': 'source_music_evidence', 'label': '原 PDF 的逐音对应核验', 'passed': False,
          'detail': review['sourceRecognition']['reason']},
         {'id': 'output_pdf_evidence', 'label': '输出 PDF 的独立核验', 'passed': False,
-         'detail': review['outputPdfRecognition']['reason']}])
+         'detail': review['outputPdfRecognition']['reason']},
+        {'id': 'release_gate', 'label': '发布门槛',
+         'passed': verification['releaseGate']['passed'],
+         'detail': ('源谱重建、确定性转调、排版回读和最终 PDF 独立复核必须全部通过'
+                    if not verification['releaseGate']['passed'] else
+                    '四个发布条件均已通过')}])
     verification['status'] = 'failed'
     verification['summary'] = ('发现 %s 处音乐数据差异，并有原谱与输出 PDF 待核对项目。' % review['issueCount']
                                if review['issueCount'] else

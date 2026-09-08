@@ -55,6 +55,7 @@ const stages = [
   { id: 'queued', zh: '等待处理', en: 'Queued' },
   { id: 'inspecting', zh: '检查原谱', en: 'Inspect score' },
   { id: 'recognizing', zh: '读取音符', en: 'Read notation' },
+  { id: 'source_repair', zh: '修复源谱', en: 'Repair source' },
   { id: 'transposing', zh: '音高转调', en: 'Transpose' },
   { id: 'rendering', zh: '生成 PDF', en: 'Generate PDF' },
   { id: 'verifying', zh: '核对结果', en: 'Verify result' },

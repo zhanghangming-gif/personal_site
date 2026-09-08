@@ -36,7 +36,6 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from score_jobs import ScoreJobs, QueueFull
-from score_skill_bridge import try_skill_transposition
 from score_agent_bridge import process_agent_score
 from score_preflight_bridge import preflight_pdf
 from score_page_selection_bridge import prepare_selected_pdf, validate_requested_pages
@@ -54,12 +53,15 @@ from score_ai_review_bridge import run_ai_visual_review
 from score_transposition import transpose_tree, pitch_number
 from score_render_audit import compare_rendered_score, exported_layout
 from score_source_audit import apply_pdf_anchors
-from score_review import write_score_review, attach_review
+from score_review import write_score_review, attach_review, build_source_repair_evidence
 from score_ir import score_ir
 from score_rhythm_gaps import detect_rhythm_gaps
 from score_editor import (candidate_info, editor_data, apply_edits, report_text,
                           regular_file, carry_rest_review)
-from score_auto_repair import apply_safe_rhythm_repairs, validate_repair_result
+from score_auto_repair import (
+    apply_safe_rhythm_repairs, validate_repair_result,
+    validate_source_repair_result,
+)
 from score_omr_options import (
     recognition_families, recognition_risk, needs_alternative,
     recognition_attempt, recognition_decision, recognition_consensus,
@@ -4013,7 +4015,7 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
                 repair_state = "repair_failed"
         repairs.append({
             "id": "repair_multimeasure_rests",
-            "label": "恢复多小节休止 / 小节编号",
+            "label": "恢复小节边界与序列 / 多小节休止计数",
             "status": (
                 "needs_review" if structure_repair.get("safePartialOutput") else
                 "fixed" if repair_was_applied(structure_repair) else
@@ -4061,7 +4063,81 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
                 "output": {"role": "output", "available": False},
             },
         )
-        progress("recognizing", "小节结构存在疑点，将保留识别内容生成待校对候选，不自动补休止", 55)
+        progress("recognizing", "小节边界与序列存在疑点，将保留识别内容生成待校对候选", 55)
+
+    # Source repair belongs to source reconstruction.  It must finish before
+    # deterministic transposition, otherwise a recognition error is copied into
+    # the target and only discovered after rendering.
+    source_before_rhythm_repair = musicxml
+    source_repair_before_gaps = {"gaps": [], "overflows": []}
+    source_evidence = None
+    auto_repair_report = {
+        "schemaVersion": 1, "status": "disabled", "appliedCount": 0,
+        "reason": "SCORE_AUTO_REPAIR_RHYTHM_GAPS is disabled",
+    }
+    if os.environ.get("SCORE_AUTO_REPAIR_RHYTHM_GAPS", "1") == "1":
+        progress("source_repair", "正在建立小节与声部时间轴，并回看原谱中的休止符", 56)
+        try:
+            source_evidence = build_source_repair_evidence(
+                job_dir, input_pdf, musicxml, read_musicxml_root,
+                omr_analysis=omr_analysis, preflight=preflight, omr_book=omr_book)
+            source_repair_before_gaps = source_evidence.get("rhythmGapDetection") or {
+                "gaps": [], "overflows": []}
+            source_root = read_musicxml_root(musicxml)
+            try:
+                omr_threshold = float(os.environ.get("SCORE_AUTO_REPAIR_OMR_GRADE", "0.75"))
+                visual_threshold = float(os.environ.get("SCORE_AUTO_REPAIR_VISUAL_SCORE", "0.94"))
+            except ValueError:
+                omr_threshold, visual_threshold = 0.75, 0.94
+            auto_repair_report = apply_safe_rhythm_repairs(
+                source_root, source_repair_before_gaps,
+                source_evidence.get("restClassification") or {},
+                max(0.70, min(0.95, omr_threshold)),
+                max(0.85, min(0.995, visual_threshold)),
+            )
+            auto_repair_report["schemaVersion"] = 1
+            if auto_repair_report.get("appliedCount"):
+                auto_source = os.path.join(job_dir, "auto-repaired-source.musicxml")
+                ET.ElementTree(source_root).write(
+                    auto_source, encoding="utf-8", xml_declaration=True)
+                after_ir = score_ir(
+                    read_musicxml_root(auto_source), "canonical-source-repaired",
+                    artifact_sha256=file_sha256(auto_source))
+                after_gaps = detect_rhythm_gaps(after_ir)
+                accepted, source_validation = validate_source_repair_result(
+                    source_repair_before_gaps, after_gaps,
+                    auto_repair_report.get("applied") or [],
+                    source_evidence.get("sourceIndex") or {}, after_ir)
+                auto_repair_report["sourceValidation"] = source_validation
+                if accepted:
+                    musicxml = auto_source
+                    auto_repair_report["status"] = "source_accepted_pending_output_validation"
+                    auto_repair_report["reason"] = source_validation["reason"]
+                else:
+                    auto_repair_report["status"] = "source_reverted"
+                    auto_repair_report["reason"] = source_validation["reason"]
+            else:
+                auto_repair_report["reason"] = "没有同时满足缺拍、原谱坐标、视觉类别、谱表几何和风险规则的候选"
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            auto_repair_report = {
+                "schemaVersion": 1, "status": "failed", "appliedCount": 0,
+                "reason": str(exc),
+            }
+            musicxml = source_before_rhythm_repair
+
+    auto_repair_path = os.path.join(job_dir, "review", "auto-repair.json")
+    os.makedirs(os.path.dirname(auto_repair_path), exist_ok=True)
+    with open(auto_repair_path + ".tmp", "w", encoding="utf-8") as stream:
+        json.dump(auto_repair_report, stream, ensure_ascii=False, indent=2)
+    os.replace(auto_repair_path + ".tmp", auto_repair_path)
+    if os.path.isfile(workspace.manifest_path):
+        workspace.register_artifact("source-draft-ir", os.path.join(job_dir, "source-draft-score-ir.json"))
+        workspace.register_artifact("source-rhythm-gaps", os.path.join(job_dir, "review", "rhythm-gaps.json"))
+        workspace.register_artifact("source-rest-evidence", os.path.join(job_dir, "review", "rest-classification.json"))
+        workspace.register_artifact("source-auto-repair", auto_repair_path)
+        if musicxml != source_before_rhythm_repair:
+            workspace.register_artifact("canonical-source-repaired", musicxml)
+
     progress("transposing", "正在计算目标音高并处理临时变音", 58)
     transposed = os.path.join(job_dir, "transposed.musicxml")
     summary = transpose_musicxml(musicxml, transposed, semitones, accidental_preference, source_instrument, target_instrument)
@@ -4128,102 +4204,63 @@ def process_score_pdf(input_pdf, job_dir, semitones, accidental_preference, prog
         semitones, accidental_preference, source_instrument, target_instrument,
         output_pdf=output_pdf, original_xml=original_musicxml,
         omr_analysis=omr_analysis, preflight=preflight, intent=intent, omr_book=omr_book,
+        source_repair_evidence=source_evidence,
     )
-    auto_repair_report = {
-        "schemaVersion": 1, "status": "disabled", "appliedCount": 0,
-        "reason": "SCORE_AUTO_REPAIR_RHYTHM_GAPS is disabled",
-    }
-    if os.environ.get("SCORE_AUTO_REPAIR_RHYTHM_GAPS", "1") == "1":
-        rendered_backup = None
-        auto_candidate_accepted = False
-        try:
-            source_root = read_musicxml_root(musicxml)
-            try:
-                omr_threshold = float(os.environ.get("SCORE_AUTO_REPAIR_OMR_GRADE", "0.75"))
-                visual_threshold = float(os.environ.get("SCORE_AUTO_REPAIR_VISUAL_SCORE", "0.94"))
-            except ValueError:
-                omr_threshold, visual_threshold = 0.75, 0.94
-            auto_repair_report = apply_safe_rhythm_repairs(
-                source_root, review.get("rhythmGapDetection") or {},
-                review.get("restClassification") or {},
-                max(0.70, min(0.95, omr_threshold)),
-                max(0.85, min(0.995, visual_threshold)),
-            )
-            auto_repair_report["schemaVersion"] = 1
-            if auto_repair_report.get("appliedCount"):
-                progress("repairing", "正在自动补入有原谱证据的休止符并重新校验", 91)
-                auto_source = os.path.join(job_dir, "auto-repaired-source.musicxml")
-                auto_transposed = os.path.join(job_dir, "auto-repaired-transposed.musicxml")
-                auto_output = os.path.join(job_dir, "auto-repaired-output.pdf")
-                ET.ElementTree(source_root).write(
-                    auto_source, encoding="utf-8", xml_declaration=True)
-                after_ir = score_ir(
-                    read_musicxml_root(auto_source), "auto-repaired-source",
-                    artifact_sha256=file_sha256(auto_source))
-                after_gaps = detect_rhythm_gaps(after_ir)
-                auto_summary = transpose_musicxml(
-                    auto_source, auto_transposed, semitones, accidental_preference,
-                    source_instrument, target_instrument)
-                rendered_path = layout_info.get("renderedMusicxml")
-                if rendered_path and os.path.isfile(rendered_path):
-                    rendered_backup = rendered_path + ".before-auto-repair"
-                    shutil.copy2(rendered_path, rendered_backup)
-                auto_pages, auto_layout = render_preserved_score_pdf(
-                    musescore, auto_transposed, auto_output, input_pdf, job_dir, timeout,
-                    "MuseScore 自动修复后重新导出 PDF", omr_analysis=omr_analysis)
-                auto_verification = verify_score_transposition(
-                    auto_source, auto_transposed, semitones, source_pages, auto_pages,
-                    omr_analysis, auto_layout, original_musicxml=original_musicxml,
-                    repair_report=structure_repair)
-                accepted, validation = validate_repair_result(
-                    review.get("rhythmGapDetection") or {}, after_gaps,
-                    auto_repair_report.get("applied") or [], auto_verification)
-                auto_repair_report["validation"] = validation
-                if accepted:
-                    shutil.copy2(auto_transposed, transposed)
-                    shutil.copy2(auto_output, output_pdf)
-                    musicxml, summary, output_pages = auto_source, auto_summary, auto_pages
-                    layout_info, verification = auto_layout, auto_verification
-                    review = write_score_review(
-                        job_dir,
-                        os.path.join(job_dir, "input.pdf") if os.path.isfile(os.path.join(job_dir, "input.pdf")) else input_pdf,
-                        musicxml, transposed, layout_info.get("renderedMusicxml"),
-                        read_musicxml_root, semitones, accidental_preference,
-                        source_instrument, target_instrument, output_pdf=output_pdf,
-                        original_xml=original_musicxml, omr_analysis=omr_analysis,
-                        preflight=preflight, intent=intent, omr_book=omr_book)
-                    auto_repair_report["status"] = "accepted"
-                    auto_repair_report["reason"] = validation["reason"]
-                    auto_candidate_accepted = True
-                else:
-                    auto_repair_report["status"] = "reverted"
-                    auto_repair_report["reason"] = validation["reason"]
-            else:
-                auto_repair_report["reason"] = "没有同时满足视觉、时值、位置和单声部安全条件的候选"
-        except (OSError, RuntimeError, ValueError, TypeError) as exc:
-            auto_repair_report["status"] = "failed"
-            auto_repair_report["reason"] = str(exc)
-        finally:
-            if rendered_backup and os.path.isfile(rendered_backup):
-                if not auto_candidate_accepted:
-                    shutil.copy2(rendered_backup, layout_info.get("renderedMusicxml"))
-                os.remove(rendered_backup)
-        auto_repair_path = os.path.join(job_dir, "review", "auto-repair.json")
-        with open(auto_repair_path + ".tmp", "w", encoding="utf-8") as stream:
-            json.dump(auto_repair_report, stream, ensure_ascii=False, indent=2)
-        os.replace(auto_repair_path + ".tmp", auto_repair_path)
-        repairs.append({
-            "id": "repair_evidence_backed_rhythm_gaps",
-            "label": "自动补全有原谱证据的休止符",
-            "status": ("fixed" if auto_repair_report.get("status") == "accepted" else
-                       "skipped" if auto_repair_report.get("status") in ("no_safe_candidate", "disabled") else
-                       "needs_review"),
-            "detail": auto_repair_report.get("reason", "未执行自动节奏修复"),
-        })
+    if auto_repair_report.get("status") == "source_accepted_pending_output_validation":
+        accepted, output_validation = validate_repair_result(
+            source_repair_before_gaps,
+            review.get("rhythmGapDetection") or {},
+            auto_repair_report.get("applied") or [], verification)
+        auto_repair_report["outputValidation"] = output_validation
+        if accepted:
+            auto_repair_report["status"] = "accepted"
+            auto_repair_report["reason"] = output_validation["reason"]
+        else:
+            # The source-only gate passed, but the transformed/rendered result did
+            # not.  Revert the source patch and rebuild the candidate from the
+            # unmodified canonical draft.
+            progress("source_repair", "自动修复未通过最终验证，正在回退并重新生成候选", 91)
+            musicxml = source_before_rhythm_repair
+            summary = transpose_musicxml(
+                musicxml, transposed, semitones, accidental_preference,
+                source_instrument, target_instrument)
+            output_pages, layout_info = render_preserved_score_pdf(
+                musescore, transposed, output_pdf, input_pdf, job_dir, timeout,
+                "MuseScore 回退源谱后重新导出 PDF", omr_analysis=omr_analysis)
+            verification = verify_score_transposition(
+                musicxml, transposed, semitones, source_pages, output_pages,
+                omr_analysis, layout_info, original_musicxml=original_musicxml,
+                repair_report=structure_repair)
+            review = write_score_review(
+                job_dir,
+                os.path.join(job_dir, "input.pdf") if os.path.isfile(os.path.join(job_dir, "input.pdf")) else input_pdf,
+                musicxml, transposed, layout_info.get("renderedMusicxml"),
+                read_musicxml_root, semitones, accidental_preference,
+                source_instrument, target_instrument, output_pdf=output_pdf,
+                original_xml=original_musicxml, omr_analysis=omr_analysis,
+                preflight=preflight, intent=intent, omr_book=omr_book,
+                source_repair_evidence=source_evidence)
+            auto_repair_report["status"] = "reverted"
+            auto_repair_report["reason"] = output_validation["reason"]
+
+    with open(auto_repair_path + ".tmp", "w", encoding="utf-8") as stream:
+        json.dump(auto_repair_report, stream, ensure_ascii=False, indent=2)
+    os.replace(auto_repair_path + ".tmp", auto_repair_path)
+    repairs.append({
+        "id": "repair_evidence_backed_rhythm_gaps",
+        "label": "原谱节奏缺口安全修复",
+        "status": ("fixed" if auto_repair_report.get("status") == "accepted" else
+                   "skipped" if auto_repair_report.get("status") in
+                   ("no_safe_candidate", "disabled") else "needs_review"),
+        "detail": auto_repair_report.get("reason", "未执行自动节奏修复"),
+    })
     verification["repairs"] = repairs
     verification["autoRepair"] = auto_repair_report
     layout_info["renderPlan"] = render_plan
     attach_review(verification, review)
+    if auto_repair_report.get("status") == "accepted":
+        verification["rhythmGapDetection"]["autoRepairApplied"] = True
+        verification["restClassification"]["autoRepairApplied"] = True
     pipeline_status = build_pipeline_status(verification, structure_repair)
     verification["pipeline"] = pipeline_status.to_dict()
     write_pipeline_report(
@@ -4466,11 +4503,11 @@ def process_score_job(job_id, request, progress):
                 warnings.append("扫描谱增强识谱输入暂时不可用，已保留原 PDF 继续处理")
 
         generic_omr = False
-        use_reviewed_adapter = os.environ.get("SCORE_ENABLE_REVIEWED_ADAPTER", "0") == "1"
+        # Reviewed gold-set files are regression fixtures only.  Production
+        # requests always use the general reconstruction pipeline and can never
+        # branch on a known PDF digest, file name, page count or coordinates.
         processed = (process_agent_score(job_dir, request, progress)
-                     if engine == "deepseek-agent" else
-                     try_skill_transposition(prepared_pdf, job_dir, request, progress)
-                     if use_reviewed_adapter else None)
+                     if engine == "deepseek-agent" else None)
         if processed is None:
             generic_omr = True
             instrument_mode = request.get("transposeMode") == "instrument"

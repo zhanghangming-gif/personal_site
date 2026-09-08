@@ -135,9 +135,8 @@ def test_agent_selection_never_falls_back_to_fixed_pipeline(api, monkeypatch, tm
     def fail_agent(*args):
         raise RuntimeError("Agent test unavailable")
     def forbid(*args, **kwargs):
-        pytest.fail("Agent-selected job must never fall back to old adapters or OMR")
+        pytest.fail("Agent-selected job must never fall back to the general OMR pipeline")
     monkeypatch.setattr(api, "process_agent_score", fail_agent)
-    monkeypatch.setattr(api, "try_skill_transposition", forbid)
     monkeypatch.setattr(api, "process_score_pdf", forbid)
     result = api.process_score_job("agentjob", request(), lambda *args: None)
     assert result["status"] == "failed"
