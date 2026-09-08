@@ -9,7 +9,7 @@ export const siteData = {
   intro: '关注机器人感知、定位导航、嵌入式开发、计算机视觉和智能硬件，希望通过技术解决真实问题。',
   location: '重庆 · 重庆大学',
   email: '2361312720@qq.com',
-  github: '', // 填入真实 GitHub 地址后，页面按钮会自动启用。
+  github: 'https://github.com/zhanghangming-gif/personal_site',
   resume: '/resume.docx',
   learning: ['硬件设计', 'ROS2 导航', '智能硬件产品开发'],
   about: {
