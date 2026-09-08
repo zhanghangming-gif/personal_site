@@ -141,6 +141,7 @@ export default function ScoreTransposePage() {
   const pageReadIdRef = useRef(0);
   const [activeJob, setActiveJob] = useState<string | null>(() => window.sessionStorage.getItem(ACTIVE_JOB_KEY));
   const [progress, setProgress] = useState(0);
+  const [displayProgress, setDisplayProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [previousVersions, setPreviousVersions] = useState<ScoreTransposeResult[]>([]);
@@ -162,7 +163,8 @@ export default function ScoreTransposePage() {
     [en, pageRange, pageSelectionMode, pdfPageCount],
   );
   const selectedPageCount = pageSelectionMode === 'all' ? (pdfPageCount ?? 0) : parsedPageSelection.pages.length;
-  const progressPercent = Math.min(100, Math.max(0, Math.round(progress)));
+  const targetProgressPercent = Math.min(100, Math.max(0, Math.round(progress)));
+  const progressPercent = Math.min(100, Math.max(0, Math.round(displayProgress)));
   const pageSelectionInvalid = Boolean(
     file && (pageCountLoading || pageCountError || !pdfPageCount ||
       (pageSelectionMode === 'all' ? pdfPageCount > MAX_SCORE_SELECTED_PAGES : parsedPageSelection.error)),
@@ -179,6 +181,23 @@ export default function ScoreTransposePage() {
   }, [file]);
 
   useEffect(() => () => uploadRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (targetProgressPercent <= displayProgress) {
+      if (targetProgressPercent < displayProgress) setDisplayProgress(targetProgressPercent);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setDisplayProgress(current => {
+        if (current >= targetProgressPercent) {
+          window.clearInterval(timer);
+          return current;
+        }
+        return current + 1;
+      });
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [displayProgress, targetProgressPercent]);
 
   useEffect(() => {
     if (!activeJob) return;
