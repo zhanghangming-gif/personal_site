@@ -157,10 +157,10 @@ export default function HomePage() {
                       : '给这个网站 Star'
                 }
                 aria-pressed={stars.starred}
-                className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5 active:translate-y-0 disabled:cursor-wait disabled:opacity-80 ${
+                className={`glass-control inline-flex min-h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition hover:-translate-y-0.5 active:translate-y-0 disabled:cursor-wait disabled:opacity-80 ${
                   stars.starred
                     ? 'border-amber-300 bg-amber-400/15 text-amber-500 shadow-lg shadow-amber-500/10 dark:border-amber-400/40 dark:text-amber-300'
-                    : 'border-[rgb(var(--line))] bg-[rgb(var(--surface))] text-slate-600 hover:border-amber-300 hover:text-amber-500 dark:text-slate-300'
+                    : 'text-slate-600 hover:border-amber-300 hover:text-amber-500 dark:text-slate-300'
                 }`}
               >
                 <Star size={18} fill={stars.starred ? 'currentColor' : 'none'} />
@@ -172,7 +172,7 @@ export default function HomePage() {
                     ? open(siteData.github, '_blank')
                     : toast(en ? 'GitHub is not public yet' : 'GitHub 暂未公开')
                 }
-                className="grid h-11 w-11 place-items-center rounded-xl border bg-[rgb(var(--surface))]"
+                className="glass-control grid h-11 w-11 place-items-center rounded-xl transition hover:-translate-y-0.5 hover:text-accent"
                 aria-label={en ? 'Visit GitHub' : '访问 GitHub'}
               >
                 <Github size={19} />

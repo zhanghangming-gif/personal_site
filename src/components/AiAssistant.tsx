@@ -227,12 +227,12 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
       {open && (
         <section
           ref={panelRef}
-          className={`fixed z-[70] flex w-[calc(100vw-1.5rem)] max-w-[380px] max-h-[min(560px,calc(100vh-1.5rem))] flex-col overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] shadow-2xl ${panelPosition ? '' : 'bottom-28 left-3 sm:left-auto sm:right-5'}`}
+          className={`liquid-popover fixed z-[70] flex w-[calc(100vw-1.5rem)] max-w-[380px] max-h-[min(560px,calc(100vh-1.5rem))] flex-col rounded-[26px] ${panelPosition ? '' : 'bottom-28 left-3 sm:left-auto sm:right-5'}`}
           style={panelPosition ? { left: panelPosition.x, top: panelPosition.y } : undefined}
           aria-label={en ? 'Zhang Hangming AI assistant' : '张航铭 AI 助手'}
         >
           <header
-            className="relative flex touch-none cursor-grab select-none items-center justify-between border-b bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-white active:cursor-grabbing"
+            className="assistant-glass-header relative flex touch-none cursor-grab select-none items-center justify-between border-b border-white/15 px-4 py-2.5 text-white active:cursor-grabbing"
             onPointerDown={startDragging}
             onPointerMove={dragPanel}
             onPointerUp={stopDragging}
@@ -311,7 +311,7 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
                   key={suggestion.label}
                   type="button"
                   onClick={() => void send(suggestion.question)}
-                  className="rounded-full border px-3 py-1.5 text-xs text-slate-600 transition hover:border-blue-400 hover:text-accent dark:text-slate-300"
+                  className="glass-control rounded-full px-3 py-1.5 text-xs text-slate-600 transition hover:text-accent dark:text-slate-300"
                 >
                   {suggestion.label}
                 </button>
@@ -339,7 +339,7 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-white transition disabled:cursor-not-allowed disabled:opacity-40"
+              className="liquid-action grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white transition disabled:cursor-not-allowed disabled:opacity-40"
               aria-label={en ? 'Send question' : '发送问题'}
             >
               <Send size={17} />
@@ -353,7 +353,7 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
 
       <div className={`${docked ? 'contents' : 'fixed bottom-4 right-3 z-[70] flex flex-col items-end gap-2 sm:bottom-5 sm:right-5'}`}>
         {!open && hintVisible && (
-          <div className="relative max-w-[210px] rounded-2xl border border-blue-200/80 bg-[rgb(var(--surface))]/95 px-3.5 py-2.5 text-left shadow-[0_14px_40px_rgba(37,99,235,0.18)] dark:border-blue-500/30">
+          <div className="liquid-popover relative max-w-[210px] rounded-2xl px-3.5 py-2.5 text-left">
             <span className="block text-sm font-bold text-slate-900 dark:text-white">
               {en ? 'Need context?' : '想快速了解？'}
             </span>
@@ -373,7 +373,7 @@ export function AiAssistant({ docked = false }: { docked?: boolean }) {
             });
           }}
           data-sound-off="true"
-          className={`group relative isolate flex items-center border border-white/25 bg-gradient-to-r from-blue-600 via-blue-600 to-indigo-600 text-left text-white shadow-[0_14px_34px_rgba(37,99,235,0.34)] transition hover:-translate-y-1 hover:shadow-[0_18px_44px_rgba(37,99,235,0.48)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/50 ${open ? 'min-h-16 gap-3 rounded-2xl px-4 py-3' : 'h-14 w-14 justify-center rounded-full p-0 sm:h-15 sm:w-15'}`}
+          className={`liquid-action group relative isolate flex items-center text-left text-white transition hover:-translate-y-1 hover:shadow-[0_20px_46px_rgba(10,132,255,0.42)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/50 ${open ? 'min-h-16 gap-3 rounded-2xl px-4 py-3' : 'h-14 w-14 justify-center rounded-full p-0 sm:h-15 sm:w-15'}`}
           aria-label={
             open
               ? en

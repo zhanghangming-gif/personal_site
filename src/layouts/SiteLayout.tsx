@@ -126,8 +126,8 @@ export function SiteLayout() {
         {en ? 'Skip to main content' : '跳到主要内容'}
       </a>
       <header className="pointer-events-none fixed inset-x-0 top-0 z-50 py-2">
-        <div className="container-site flex h-16 items-center justify-between gap-4">
-          <Link to="/" className="mac-toolbar pointer-events-auto rounded-[18px] px-4 py-2 text-[17px] font-semibold tracking-[-0.03em]">
+        <div className="container-site flex h-16 items-center justify-between gap-2 sm:gap-4">
+          <Link to="/" className="mac-toolbar pointer-events-auto rounded-[18px] px-3 py-2 text-[17px] font-semibold tracking-[-0.03em] sm:px-4">
             ZHANG<span className="text-accent">.</span>
           </Link>
           <nav className={`mac-dock pointer-events-auto hidden h-16 items-center gap-3 rounded-[26px] px-3 py-1.5 lg:flex ${!top ? 'mac-dock-scrolled' : ''}`} aria-label={en ? 'Main navigation' : '主导航'}>
@@ -142,7 +142,7 @@ export function SiteLayout() {
                   aria-current={active ? 'page' : undefined}
                   className={`group relative flex h-[58px] w-[52px] shrink-0 flex-col items-center justify-center gap-0.5 rounded-[16px] transition-[transform,color] duration-150 ease-out hover:-translate-y-0.5 focus-visible:-translate-y-0.5 ${active ? '-translate-y-0.5 text-accent dark:text-blue-300' : 'text-slate-600 hover:text-accent dark:text-slate-300 dark:hover:text-blue-300'}`}
                 >
-                  <span className={`grid place-items-center rounded-full transition-[width,height,background-color,box-shadow] duration-150 ${active ? 'h-10 w-10 bg-accent text-white shadow-[0_5px_16px_rgba(0,122,255,0.32)]' : 'h-8 w-8 bg-black/[0.045] group-hover:bg-blue-100 dark:bg-white/[0.08] dark:group-hover:bg-blue-400/20'}`}>
+                  <span className={`grid place-items-center rounded-full transition-[width,height,background-color,box-shadow] duration-200 ${active ? 'nav-orb-active h-10 w-10 text-white' : 'nav-orb h-8 w-8 group-hover:bg-blue-100/70 dark:group-hover:bg-blue-400/20'}`}>
                     <Icon size={active ? 19 : 17} strokeWidth={active ? 2.35 : 2} />
                   </span>
                   <span className={`whitespace-nowrap text-[10px] font-medium leading-none tracking-[-0.02em] ${active ? 'text-accent dark:text-blue-300' : 'text-slate-600 dark:text-slate-300'}`}>{label}</span>
@@ -164,7 +164,7 @@ export function SiteLayout() {
                 <ChevronDown size={15} className={`transition-transform ${toolsOpen ? 'rotate-180' : ''}`} />
               </button>
               {toolsOpen && (
-                <div role="menu" className="absolute right-0 top-[calc(100%+0.75rem)] w-[370px] overflow-hidden rounded-[22px] border border-white/60 bg-[rgba(255,255,255,0.92)] text-slate-900 shadow-[0_24px_70px_rgba(15,23,42,0.22)] backdrop-blur-2xl dark:border-slate-600/70 dark:bg-[rgba(9,16,28,0.96)] dark:text-slate-100 dark:shadow-[0_28px_80px_rgba(0,0,0,0.58)]">
+                <div role="menu" className="liquid-popover absolute right-0 top-[calc(100%+0.75rem)] w-[370px] text-slate-900 dark:text-slate-100">
                   <div className="flex items-center justify-between border-b border-slate-200/80 px-4 py-3 dark:border-slate-700/80">
                     <div className="flex gap-1.5" aria-hidden="true">
                       <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
@@ -188,7 +188,7 @@ export function SiteLayout() {
             </div>
             <button
               onClick={toggleLanguage}
-              className="inline-flex h-10 min-w-[4.25rem] items-center justify-center gap-1.5 rounded-[14px] border border-transparent bg-slate-100/80 px-2.5 text-sm font-bold transition hover:bg-blue-100 hover:text-accent dark:bg-slate-800/80 dark:hover:bg-blue-400/20"
+              className="glass-control inline-flex h-10 min-w-[4.25rem] items-center justify-center gap-1.5 rounded-[14px] px-2.5 text-sm font-bold transition hover:text-accent"
               aria-label={en ? '切换到中文' : 'Switch to English'}
             >
               <Languages size={17} />
@@ -198,7 +198,7 @@ export function SiteLayout() {
               type="button"
               onClick={toggleSound}
               data-sound-off="true"
-              className="inline-flex h-10 w-10 items-center justify-center gap-1.5 rounded-[14px] border border-transparent bg-slate-100/80 text-sm font-bold transition hover:bg-blue-100 hover:text-accent dark:bg-slate-800/80 dark:hover:bg-blue-400/20 sm:w-auto sm:min-w-[6.5rem] sm:px-2.5"
+              className="glass-control hidden h-10 w-10 items-center justify-center gap-1.5 rounded-[14px] text-sm font-bold transition hover:text-accent min-[480px]:inline-flex sm:w-auto sm:min-w-[6.5rem] sm:px-2.5"
               aria-label={soundEnabled ? (en ? 'Turn sound effects off' : '关闭音效') : (en ? 'Turn sound effects on' : '开启音效')}
               aria-pressed={soundEnabled}
               title={soundEnabled ? (en ? 'Sound on' : '音效开启') : (en ? 'Sound off' : '音效关闭')}
@@ -208,14 +208,14 @@ export function SiteLayout() {
             </button>
             <button
               onClick={toggle}
-              className="grid h-10 w-10 place-items-center rounded-[14px] border border-transparent bg-slate-100/80 transition hover:bg-blue-100 hover:text-accent dark:bg-slate-800/80 dark:hover:bg-blue-400/20"
+              className="glass-control grid h-10 w-10 place-items-center rounded-[14px] transition hover:text-accent"
               aria-label={theme === 'dark' ? (en ? 'Switch to light mode' : '切换到浅色模式') : (en ? 'Switch to dark mode' : '切换到深色模式')}
             >
               {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             <button
               onClick={() => setOpen((v) => !v)}
-              className="grid h-10 w-10 place-items-center rounded-[14px] border border-transparent bg-slate-100/80 transition dark:bg-slate-800/80 lg:hidden"
+              className="glass-control grid h-10 w-10 place-items-center rounded-[14px] transition lg:hidden"
               aria-label={open ? (en ? 'Close menu' : '关闭菜单') : (en ? 'Open menu' : '打开菜单')}
               aria-expanded={open}
             >
@@ -225,8 +225,8 @@ export function SiteLayout() {
         </div>
       </header>
       {open && (
-        <div className="fixed inset-0 z-40 bg-[rgb(var(--page))]/92 px-6 pt-24 backdrop-blur-2xl lg:hidden">
-          <nav className="surface mx-auto max-w-lg rounded-[30px] p-5" aria-label={en ? 'Mobile navigation' : '移动端导航'}>
+        <div className="liquid-sheet fixed inset-0 z-40 px-6 pt-24 lg:hidden">
+          <nav className="liquid-popover mx-auto max-w-lg rounded-[30px] p-5" aria-label={en ? 'Mobile navigation' : '移动端导航'}>
             <p className="mb-5 text-center text-xs font-bold tracking-[0.2em] text-slate-400">{en ? 'NAVIGATION' : '导航中心'}</p>
             <div className="grid grid-cols-4 gap-x-3 gap-y-5">
             {nav.map(({ label, href, icon: Icon }) => {
@@ -239,7 +239,7 @@ export function SiteLayout() {
                 className="group flex min-w-0 flex-col items-center gap-2 text-center"
                 aria-label={label}
               >
-                <span className={`grid rounded-full transition-all ${active ? 'h-14 w-14 -translate-y-1 bg-accent text-white shadow-lg shadow-blue-600/30' : 'h-12 w-12 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}><Icon className="m-auto" size={active ? 23 : 20} /></span>
+                <span className={`grid rounded-full transition-all ${active ? 'nav-orb-active h-14 w-14 -translate-y-1 text-white' : 'nav-orb h-12 w-12 text-slate-600 dark:text-slate-300'}`}><Icon className="m-auto" size={active ? 23 : 20} /></span>
                 <span className={`w-full truncate text-xs font-bold ${active ? 'text-accent dark:text-blue-300' : 'text-slate-500 dark:text-slate-400'}`}>{label}</span>
               </Link>
               );
@@ -287,7 +287,7 @@ export function SiteLayout() {
           <button
             type="button"
             onClick={() => scrollTo({ top: 0, behavior: 'smooth' })}
-            className="grid h-12 w-12 place-items-center rounded-full border border-[rgb(var(--line))] bg-[rgb(var(--surface))]/95 text-accent shadow-[0_12px_28px_rgba(15,23,42,0.12)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-blue-400 dark:shadow-[0_12px_28px_rgba(0,0,0,0.28)]"
+            className="liquid-glass grid h-12 w-12 place-items-center rounded-full text-accent transition hover:-translate-y-0.5 hover:border-blue-400"
             aria-label={en ? 'Back to top' : '返回顶部'}
           >
             <ArrowUp size={19} />

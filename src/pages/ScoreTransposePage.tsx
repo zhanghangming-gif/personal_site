@@ -636,7 +636,7 @@ export default function ScoreTransposePage() {
                   {result.editorAvailable && (
                     <button
                       type="button"
-                      className="group inline-flex min-h-14 items-center justify-center gap-2.5 rounded-full bg-gradient-to-b from-blue-500 to-blue-600 px-7 text-base font-black text-white shadow-[0_10px_28px_rgba(37,99,235,0.3)] ring-1 ring-inset ring-blue-300/70 transition duration-200 hover:-translate-y-0.5 hover:from-blue-400 hover:to-blue-600 hover:shadow-[0_14px_34px_rgba(37,99,235,0.38)] active:translate-y-0 active:scale-[0.98]"
+                      className="liquid-action group inline-flex min-h-14 items-center justify-center gap-2.5 rounded-full px-7 text-base font-black text-white transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(10,132,255,0.4)] active:translate-y-0 active:scale-[0.98]"
                       onClick={() => setEditorOpen(v => !v)}
                     >
                       <PencilLine size={21} strokeWidth={2.4} className="transition-transform duration-200 group-hover:-rotate-6 group-hover:scale-110" />
