@@ -3281,10 +3281,15 @@ def get_pdf_page_count(path):
     if os.path.isdir(vendor_path) and vendor_path not in sys.path:
         sys.path.insert(0, vendor_path)
     try:
-        from PyPDF2 import PdfFileReader
-        with open(path, "rb") as file:
-            reader = PdfFileReader(file, strict=False)
-            return max(1, int(reader.getNumPages()))
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(path, strict=False)
+            return max(1, len(reader.pages))
+        except ImportError:
+            from PyPDF2 import PdfFileReader
+            with open(path, "rb") as file:
+                reader = PdfFileReader(file, strict=False)
+                return max(1, int(reader.getNumPages()))
     except (ImportError, OSError, ValueError, TypeError, Exception) as exc:
         logging.warning("reliable PDF page parser unavailable for %s: %s", path, exc)
     try:
@@ -3493,9 +3498,29 @@ def scale_pdf_to_page(input_path, output_path, target_width, target_height):
     if vendor_path not in sys.path:
         sys.path.insert(0, vendor_path)
     try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:
+        PdfReader = None
+    if PdfReader is not None:
+        reader = PdfReader(input_path, strict=False)
+        writer = PdfWriter()
+        for page in reader.pages:
+            width = float(page.mediabox.width)
+            height = float(page.mediabox.height)
+            scale = min(target_width / width, target_height / height)
+            page.scale_by(scale)
+            page.mediabox.lower_left = (0, 0)
+            page.mediabox.upper_right = (target_width, target_height)
+            page.cropbox.lower_left = (0, 0)
+            page.cropbox.upper_right = (target_width, target_height)
+            writer.add_page(page)
+        with open(output_path, "wb") as output_file:
+            writer.write(output_file)
+        return
+    try:
         from PyPDF2 import PdfFileReader, PdfFileWriter
     except ImportError:
-        raise RuntimeError("服务器缺少 PyPDF2，无法把保版式结果缩放回原 PDF 页面")
+        raise RuntimeError("服务器缺少 PDF 页面处理库，无法把保版式结果缩放回原 PDF 页面")
     with open(input_path, "rb") as source_file, open(output_path, "wb") as output_file:
         reader = PdfFileReader(source_file)
         writer = PdfFileWriter()

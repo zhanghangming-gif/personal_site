@@ -35,6 +35,41 @@ def test_header_preservation_keeps_source_title_and_target_music(api, tmp_path):
     assert report["preservedPages"] == 1
 
 
+def test_page_reflow_preserves_only_first_page_title(api, tmp_path):
+    import pymupdf
+    from score_static_content import preserve_headers
+
+    source = tmp_path / "source-two-pages.pdf"
+    target = tmp_path / "target-one-page.pdf"
+    output = tmp_path / "output-one-page.pdf"
+    pdf = canvas.Canvas(str(source), pagesize=(300, 200))
+    for page_number in (1, 2):
+        pdf.drawString(20, 180, "SOURCE TITLE %s" % page_number)
+        for y in (80, 85, 90, 95, 100):
+            pdf.line(30, y, 270, y)
+        pdf.showPage()
+    pdf.save()
+    make_pdf(target, "LOST TITLE", "NEW MUSIC")
+    structures = {"pages": [{
+        "page": 1,
+        "systems": [{"bbox": [25, 90, 275, 135]}],
+    }]}
+    source_map = tmp_path / "source-two.json"
+    target_map = tmp_path / "target-one.json"
+    source_map.write_text(json.dumps(structures), encoding="utf-8")
+    target_map.write_text(json.dumps(structures), encoding="utf-8")
+
+    report = preserve_headers(source, target, source_map, target_map, output)
+    document = pymupdf.open(output)
+    text = document[0].get_text()
+    assert len(document) == 1
+    assert "SOURCE TITLE 1" in text
+    assert "NEW MUSIC" in text
+    assert report["pageCountChanged"] is True
+    assert report["sourcePages"] == 2
+    assert report["targetPages"] == 1
+
+
 def test_taller_source_title_band_moves_target_notation_below_it(api, tmp_path):
     import pymupdf
     from score_static_content import preserve_headers

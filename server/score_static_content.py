@@ -78,12 +78,29 @@ def preserve_headers(source_pdf, target_pdf, source_structures, target_structure
     target = pymupdf.open(target_pdf)
     if source.needs_pass or target.needs_pass or not len(source):
         raise ValueError("PDF 无法读取或需要密码")
-    if len(source) != len(target):
-        raise ValueError("源谱与候选谱页数不一致")
+    source_pages = len(source)
+    target_pages = len(target)
+    page_count_changed = source_pages != target_pages
 
     output = pymupdf.open()
     pages = []
-    for index, (source_page, target_page) in enumerate(zip(source, target), 1):
+    for index, target_page in enumerate(target, 1):
+        # Re-engraving can reflow several source pages into fewer target pages.
+        # In that case only page 1 has a stable semantic relationship: it owns
+        # the work title, composer and part name. Never guess running-header
+        # correspondence for later pages.
+        if page_count_changed and index > 1:
+            page = output.new_page(width=target_page.rect.width,
+                                   height=target_page.rect.height)
+            page.show_pdf_page(page.rect, target, index - 1,
+                               keep_proportion=False)
+            pages.append({
+                "page": index,
+                "status": "skipped",
+                "reason": "页数变化，仅安全保留首页标题",
+            })
+            continue
+        source_page = source[0 if page_count_changed else index - 1]
         source_rect, target_rect = source_page.rect, target_page.rect
         width_delta = abs(source_rect.width - target_rect.width)
         height_delta = abs(source_rect.height - target_rect.height)
@@ -163,6 +180,9 @@ def preserve_headers(source_pdf, target_pdf, source_structures, target_structure
     return {
         "schemaVersion": 1,
         "mode": "source_header_preservation",
+        "sourcePages": source_pages,
+        "targetPages": target_pages,
+        "pageCountChanged": page_count_changed,
         "sourceSha256": digest(source_pdf),
         "targetSha256": digest(target_pdf),
         "outputSha256": digest(output_path),

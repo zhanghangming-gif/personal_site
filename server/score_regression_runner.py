@@ -48,7 +48,7 @@ def safe_page_count(path):
 
 
 def run(input_dir, output_dir, limit=0, manifest_path=None, baseline_path=None,
-        case_ids=None):
+        case_ids=None, resume=False):
     os.makedirs(output_dir, exist_ok=True)
     manifest, cases = (load_manifest(input_dir, manifest_path)
                        if manifest_path else (None, directory_cases(input_dir)))
@@ -61,13 +61,40 @@ def run(input_dir, output_dir, limit=0, manifest_path=None, baseline_path=None,
         cases = [case for case in cases if case["caseId"] in selected]
     if limit:
         cases = cases[:limit]
-    aggregate = {"schemaVersion": 2, "startedAt": time.time(),
-                 "inputCount": len(cases), "manifest": manifest_path, "results": []}
     summary_path = os.path.join(output_dir, "regression-report.json")
+    previous_results = []
+    if resume and os.path.isfile(summary_path):
+        with open(summary_path, encoding="utf-8") as stream:
+            previous = json.load(stream)
+        previous_results = previous.get("results") or []
+        if not isinstance(previous_results, list):
+            raise ValueError("续跑报告中的 results 不是数组")
+    completed = {}
+    for row in previous_results:
+        case_id = row.get("caseId")
+        if case_id and row.get("sourceSha256"):
+            completed[case_id] = row
+    aggregate = {"schemaVersion": 2, "startedAt": time.time(),
+                 "inputCount": len(cases), "manifest": manifest_path,
+                 "resumed": bool(resume), "results": []}
+    for case in cases:
+        existing = completed.get(case["caseId"])
+        if existing and existing.get("sourceSha256") == case["sha256"]:
+            aggregate["results"].append(existing)
     for index, case in enumerate(cases, 1):
+        existing = completed.get(case["caseId"])
+        if existing and existing.get("sourceSha256") == case["sha256"]:
+            continue
         source = case["path"]
         stem = "%03d" % index
         workspace = os.path.join(output_dir, stem)
+        if resume and os.path.exists(workspace):
+            attempt = 1
+            while os.path.exists(os.path.join(
+                    output_dir, "%s-resume-%d" % (stem, attempt))):
+                attempt += 1
+            stem = "%s-resume-%d" % (stem, attempt)
+            workspace = os.path.join(output_dir, stem)
         os.makedirs(workspace, exist_ok=True)
         copied = os.path.join(workspace, "input.pdf")
         shutil.copyfile(source, copied)
@@ -199,6 +226,7 @@ def main():
     parser.add_argument("--manifest")
     parser.add_argument("--baseline")
     parser.add_argument("--case-id", action="append", default=[])
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
     if args.validate_only:
@@ -210,7 +238,7 @@ def main():
                   "caseCount": len(cases), "caseIds": [case["caseId"] for case in cases]}
     else:
         result = run(args.input_dir, args.output_dir, args.limit,
-                     args.manifest, args.baseline, args.case_id)
+                     args.manifest, args.baseline, args.case_id, args.resume)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

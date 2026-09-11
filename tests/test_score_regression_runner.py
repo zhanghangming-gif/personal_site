@@ -154,3 +154,50 @@ def test_runner_can_select_one_manifest_case(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="案例不存在"):
         runner.run(str(tmp_path), str(tmp_path / "other"),
                    manifest_path="fixed.json", case_ids=["missing"])
+
+
+def test_runner_resume_keeps_completed_case_and_avoids_partial_workspace(
+        tmp_path, monkeypatch):
+    cases = [
+        {"caseId": "one", "path": str(tmp_path / "one.pdf"), "sha256": "a" * 64,
+         "tags": [], "metadata": {}, "expectations": {}, "request": {}},
+        {"caseId": "two", "path": str(tmp_path / "two.pdf"), "sha256": "b" * 64,
+         "tags": [], "metadata": {}, "expectations": {}, "request": {}},
+    ]
+    for case in cases:
+        Path(case["path"]).write_bytes(b"%PDF-1.4\n%%EOF")
+    output = tmp_path / "out"
+    (output / "002").mkdir(parents=True)
+    (output / "regression-report.json").write_text(json.dumps({
+        "results": [{
+            "index": 1, "caseId": "one", "sourceSha256": "a" * 64,
+            "status": "NEEDS_REVIEW", "workspace": "001",
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setattr(runner, "load_manifest",
+                        lambda *_: ({"schemaVersion": 1}, cases))
+    monkeypatch.setattr(runner, "preflight_pdf", lambda path, _work: (path, {}))
+    monkeypatch.setattr(runner, "inspect_score_pdf", lambda *_: {
+        "scoreProfile": {"documentType": "vector"}})
+
+    def process(_source, workspace, *_args, **_kwargs):
+        result = Path(workspace, "output.pdf")
+        result.write_bytes(b"%PDF-1.4\n%%EOF")
+        return str(result), {}, {}
+
+    monkeypatch.setattr(runner, "process_score_pdf", process)
+    monkeypatch.setattr(runner, "inspect_rendered_score_pdf", lambda *_: {})
+    monkeypatch.setattr(runner, "preserve_score_headers",
+                        lambda _w, _s, result: (result, {}))
+    monkeypatch.setattr(runner, "read_pipeline_report", lambda *_: {
+        "pipeline": {"overallStatus": "NEEDS_REVIEW", "stage": "review"},
+        "verification": {},
+    })
+    monkeypatch.setattr(runner, "write_pipeline_report", lambda *_: None)
+    monkeypatch.setattr(runner, "get_pdf_page_count", lambda _: 1)
+
+    result = runner.run(str(tmp_path), str(output),
+                        manifest_path="fixed.json", resume=True)
+    assert [row["caseId"] for row in result["results"]] == ["one", "two"]
+    assert result["results"][0]["workspace"] == "001"
+    assert result["results"][1]["workspace"] == "002-resume-1"

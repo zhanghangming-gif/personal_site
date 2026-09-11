@@ -19,7 +19,9 @@ def preserve_score_headers(job_dir, source_pdf, target_pdf):
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    timeout=120, check=False)
         if completed.returncode:
-            raise RuntimeError("原谱标题区保留失败")
+            detail = completed.stderr.decode("utf-8", "replace").strip().splitlines()
+            suffix = ("：" + detail[-1]) if detail else ""
+            raise RuntimeError("原谱标题区保留失败" + suffix)
         with open(report, encoding="utf-8") as stream:
             value = json.load(stream)
         if not os.path.isfile(output):

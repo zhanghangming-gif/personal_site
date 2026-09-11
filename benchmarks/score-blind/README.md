@@ -28,6 +28,17 @@ python server/score_regression_runner.py `
   --manifest benchmarks/score-blind/manifest.json
 ```
 
+运行中断后，可在相同输出目录安全续跑。已经落盘且文件摘要一致的案例会跳过，
+中断时留下的半成品工作目录不会复用：
+
+```powershell
+python server/score_regression_runner.py `
+  D:\Codex\score-training-scores `
+  D:\Codex\score-benchmark-runs\baseline-v1 `
+  --manifest benchmarks/score-blind/manifest.json `
+  --resume
+```
+
 只运行一个案例做流水线冒烟测试时，可追加：
 
 ```powershell
