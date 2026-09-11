@@ -127,10 +127,10 @@ export function SiteLayout() {
       </a>
       <header className="pointer-events-none fixed inset-x-0 top-0 z-50 py-2">
         <div className="container-site flex h-16 items-center justify-between gap-2 sm:gap-4">
-          <Link to="/" className="mac-toolbar pointer-events-auto rounded-[18px] px-3 py-2 text-[17px] font-semibold tracking-[-0.03em] sm:px-4">
+          <Link to="/" className="mac-toolbar pointer-events-auto shrink-0 rounded-[18px] px-3 py-2 text-[17px] font-semibold tracking-[-0.03em] sm:px-4">
             ZHANG<span className="text-accent">.</span>
           </Link>
-          <nav className={`mac-dock pointer-events-auto hidden h-16 items-center gap-3 rounded-[26px] px-3 py-1.5 lg:flex ${!top ? 'mac-dock-scrolled' : ''}`} aria-label={en ? 'Main navigation' : '主导航'}>
+          <nav className={`mac-dock pointer-events-auto hidden h-16 shrink-0 items-center gap-3 rounded-[26px] px-3 py-1.5 xl:flex ${!top ? 'mac-dock-scrolled' : ''}`} aria-label={en ? 'Main navigation' : '主导航'}>
             {nav.map(({ label, href, icon: Icon }) => {
               const active = getIsActive(href);
               return (
@@ -150,8 +150,8 @@ export function SiteLayout() {
               );
             })}
           </nav>
-          <div className="mac-toolbar pointer-events-auto flex items-center gap-1 p-1">
-            <div ref={desktopToolsRef} className="relative hidden lg:block">
+          <div className="mac-toolbar pointer-events-auto flex shrink-0 items-center gap-1 p-1">
+            <div ref={desktopToolsRef} className="relative hidden xl:block">
               <button
                 type="button"
                 onClick={() => setToolsOpen(value => !value)}
@@ -164,7 +164,7 @@ export function SiteLayout() {
                 <ChevronDown size={15} className={`transition-transform ${toolsOpen ? 'rotate-180' : ''}`} />
               </button>
               {toolsOpen && (
-                <div role="menu" className="liquid-popover absolute right-0 top-[calc(100%+0.75rem)] w-[370px] text-slate-900 dark:text-slate-100">
+                <div role="menu" className="liquid-popover absolute right-0 top-[calc(100%+0.75rem)] w-[370px] max-w-[calc(100vw-2rem)] text-slate-900 dark:text-slate-100">
                   <div className="flex items-center justify-between border-b border-slate-200/80 px-4 py-3 dark:border-slate-700/80">
                     <div className="flex gap-1.5" aria-hidden="true">
                       <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
@@ -215,7 +215,7 @@ export function SiteLayout() {
             </button>
             <button
               onClick={() => setOpen((v) => !v)}
-              className="glass-control grid h-10 w-10 place-items-center rounded-[14px] transition lg:hidden"
+              className="glass-control grid h-10 w-10 place-items-center rounded-[14px] transition xl:hidden"
               aria-label={open ? (en ? 'Close menu' : '关闭菜单') : (en ? 'Open menu' : '打开菜单')}
               aria-expanded={open}
             >
@@ -225,7 +225,7 @@ export function SiteLayout() {
         </div>
       </header>
       {open && (
-        <div className="liquid-sheet fixed inset-0 z-40 px-6 pt-24 lg:hidden">
+        <div className="liquid-sheet fixed inset-0 z-40 overflow-y-auto px-4 pb-8 pt-24 sm:px-6 xl:hidden">
           <nav className="liquid-popover mx-auto max-w-lg rounded-[30px] p-5" aria-label={en ? 'Mobile navigation' : '移动端导航'}>
             <p className="mb-5 text-center text-xs font-bold tracking-[0.2em] text-slate-400">{en ? 'NAVIGATION' : '导航中心'}</p>
             <div className="grid grid-cols-4 gap-x-3 gap-y-5">

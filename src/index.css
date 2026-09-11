@@ -154,7 +154,6 @@
 .mac-dock,
 .liquid-glass,
 .liquid-popover {
-  position: relative;
   isolation: isolate;
   border: 1px solid rgb(var(--glass-stroke) / 0.72);
   color: rgb(var(--glass-ink));
@@ -167,6 +166,11 @@
     0 16px 46px -22px rgb(var(--glass-shadow) / 0.38);
   -webkit-backdrop-filter: blur(24px) saturate(1.65);
   backdrop-filter: blur(24px) saturate(1.65);
+}
+.mac-toolbar,
+.mac-dock,
+.liquid-glass {
+  position: relative;
 }
 .mac-toolbar {
   border-radius: 18px;
